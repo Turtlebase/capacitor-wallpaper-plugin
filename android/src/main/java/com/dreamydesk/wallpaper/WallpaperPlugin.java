@@ -1,5 +1,5 @@
 
-package com.dreamydesk.wallpaper;
+package com.dreamydesk.app;
 
 import android.app.WallpaperManager;
 import android.content.ComponentName;
