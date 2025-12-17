@@ -1,4 +1,3 @@
-
 package com.dreamydesk.app.plugins;
 
 import android.app.WallpaperManager;
