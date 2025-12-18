@@ -381,7 +381,16 @@ public class WallpaperPlugin extends Plugin {
         public void run() {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
-                wallpaperManager.setBitmap(bmp);
+                if (IS_NOUGAT_OR_GREATER) {
+                    wallpaperManager.setBitmap(
+                    	bmp,
+    				    null,
+      				    true,
+        				WallpaperManager.FLAG_SYSTEM   // ✅ HOME ONLY
+  				   );
+				} else {
+   						 wallpaperManager.setBitmap(bmp);
+                }
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
@@ -406,9 +415,20 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
-                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
-                } else {
-                    wallpaperManager.setBitmap(bmp);
+            wallpaperManager.setBitmap(
+                bmp,
+                null,
+                true,
+                WallpaperManager.FLAG_SYSTEM
+            );
+            wallpaperManager.setBitmap(
+                bmp,
+                null,
+                true,
+                WallpaperManager.FLAG_LOCK
+            );
+        } else {
+            wallpaperManager.setBitmap(bmp);
                 }
                 JSObject result = new JSObject();
                 result.put("success", true);
@@ -433,10 +453,10 @@ public class WallpaperPlugin extends Plugin {
         public void run() {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
-                wallpaperManager.setBitmap(bmp);
-                if (IS_NOUGAT_OR_GREATER) {
-                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
-                }
+                wallpaperManager.setBitmap(bmp);  
+         if (IS_NOUGAT_OR_GREATER) {  
+             wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);  
+         }  
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
