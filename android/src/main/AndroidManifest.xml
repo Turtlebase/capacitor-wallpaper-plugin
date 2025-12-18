@@ -15,7 +15,7 @@
             android:name=".LiveWallpaperService"
             android:enabled="true"
             android:exported="true"
-            android:label="Live Wallpaper"
+            android:label="@string/wallpaper_service_name"
             android:permission="android.permission.BIND_WALLPAPER">
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
