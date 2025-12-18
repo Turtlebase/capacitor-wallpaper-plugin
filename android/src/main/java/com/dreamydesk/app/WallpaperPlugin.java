@@ -15,7 +15,11 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -23,6 +27,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+/**
+ * Capacitor Wallpaper Plugin
+ * 
+ * Static wallpapers: Set directly by the app
+ * Live wallpapers: Download video/GIF, then open native Android picker for user selection
+ * 
+ * @version 1.0.0
+ */
 @CapacitorPlugin(name = "WallpaperPlugin")
 public class WallpaperPlugin extends Plugin {
 
@@ -32,7 +44,15 @@ public class WallpaperPlugin extends Plugin {
 
     @Override
     public void load() {
+        super.load();
         Log.d(TAG, "✅ WallpaperPlugin loaded successfully!");
+    }
+
+    @PluginMethod
+    public void isAvailable(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("available", true);
+        call.resolve(result);
     }
 
     @PluginMethod
@@ -46,12 +66,9 @@ public class WallpaperPlugin extends Plugin {
         String url = call.getString("url");
         
         if (url == null || url.isEmpty()) {
-            Log.e(TAG, "❌ No URL provided");
             call.reject("Must provide URL");
             return;
         }
-
-        Log.d(TAG, "🌐 Downloading from: " + url);
 
         Bitmap bmp = null;
         ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -60,16 +77,13 @@ public class WallpaperPlugin extends Plugin {
         try {
             bmp = future.get();
             if (bmp == null) {
-                Log.e(TAG, "❌ Failed to download image");
                 call.reject("Failed to download image");
                 executorService.shutdown();
                 return;
             }
-            Log.d(TAG, "✅ Image downloaded successfully");
         } catch (InterruptedException | ExecutionException e) {
-            Log.e(TAG, "❌ Error: " + e.getMessage());
             e.printStackTrace();
-            call.reject("Failed to download: " + e.getMessage());
+            call.reject("Download failed: " + e.getMessage());
             executorService.shutdown();
             return;
         }
@@ -106,7 +120,7 @@ public class WallpaperPlugin extends Plugin {
             }
         } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
-            call.reject("Failed to download: " + e.getMessage());
+            call.reject("Download failed: " + e.getMessage());
             executorService.shutdown();
             return;
         }
@@ -143,7 +157,7 @@ public class WallpaperPlugin extends Plugin {
             }
         } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
-            call.reject("Failed to download: " + e.getMessage());
+            call.reject("Download failed: " + e.getMessage());
             executorService.shutdown();
             return;
         }
@@ -152,50 +166,92 @@ public class WallpaperPlugin extends Plugin {
         executorService.shutdown();
     }
 
+    /**
+     * Download video/GIF from Firebase and open native Android live wallpaper picker
+     * User selects the wallpaper themselves - following Android guidelines
+     */
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
         Log.d(TAG, "📱 setLiveWallpaper called");
         
-        try {
-            String videoUrl = call.getString("url");
-            String type = call.getString("type", "gif");
-            
-            if (videoUrl == null || videoUrl.isEmpty()) {
-                call.reject("Must provide video URL");
-                return;
+        String videoUrl = call.getString("url");
+        String type = call.getString("type", null);
+        
+        if (videoUrl == null || videoUrl.isEmpty()) {
+            call.reject("Must provide video URL");
+            return;
+        }
+
+        // Auto-detect type from URL if not provided
+        if (type == null || type.isEmpty()) {
+            String urlLower = videoUrl.toLowerCase();
+            if (urlLower.contains(".mp4") || urlLower.contains("mp4?") || urlLower.contains("mp4&")) {
+                type = "mp4";
+                Log.d(TAG, "🔍 Auto-detected: MP4");
+            } else if (urlLower.contains(".gif") || urlLower.contains("gif?") || urlLower.contains("gif&")) {
+                type = "gif";
+                Log.d(TAG, "🔍 Auto-detected: GIF");
+            } else {
+                type = "gif";
+                Log.w(TAG, "⚠️ Defaulting to GIF");
             }
+        }
 
-            getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
-                .edit()
-                .putString("live_wallpaper_url", videoUrl)
-                .putString("live_wallpaper_type", type)
-                .apply();
+        final String finalType = type;
+        Log.d(TAG, "🎬 Downloading " + finalType.toUpperCase());
 
+        // Download in background
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        Future<Boolean> future = executorService.submit(new DownloadVideoCallable(videoUrl, finalType));
+
+        try {
+            boolean success = future.get();
+            if (success) {
+                Log.d(TAG, "✅ Download complete - opening native picker");
+                openNativeLiveWallpaperPicker(call);
+            } else {
+                call.reject("Failed to download video");
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            e.printStackTrace();
+            call.reject("Error: " + e.getMessage());
+        } finally {
+            executorService.shutdown();
+        }
+    }
+
+    /**
+     * Opens Android's native live wallpaper chooser
+     * User can preview and select the wallpaper
+     */
+    private void openNativeLiveWallpaperPicker(PluginCall call) {
+        try {
+            Log.d(TAG, "📱 Launching native wallpaper picker");
+            
             Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
             intent.putExtra(
                 WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
                 new ComponentName(getContext(), LiveWallpaperService.class)
             );
+            
             getActivity().startActivity(intent);
-
+            
             JSObject result = new JSObject();
             result.put("success", true);
             call.resolve(result);
             
-            Log.d(TAG, "✅ Live wallpaper intent launched");
+            Log.d(TAG, "✅ Native picker opened - user can now select wallpaper");
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed: " + e.getMessage());
-            call.reject("Failed to set live wallpaper: " + e.getMessage());
+            Log.e(TAG, "❌ Failed to open picker: " + e.getMessage());
+            call.reject("Failed to open wallpaper picker: " + e.getMessage());
         }
     }
 
-    @PluginMethod
-    public void isAvailable(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("available", true);
-        call.resolve(result);
-    }
+    // ================== INNER CLASSES ==================
 
+    /**
+     * Downloads image from URL
+     */
     private class GetBitmapFromURLCallable implements Callable<Bitmap> {
         private String URL;
 
@@ -206,16 +262,114 @@ public class WallpaperPlugin extends Plugin {
         @Override
         public Bitmap call() {
             Bitmap bmp = null;
+            HttpURLConnection connection = null;
+            InputStream inputStream = null;
+            
             try {
-                Log.d(TAG, "⬇️ Downloading image...");
                 URL imageUrl = new URL(this.URL);
-                bmp = BitmapFactory.decodeStream(imageUrl.openStream());
-                Log.d(TAG, "✅ Download complete");
+                connection = (HttpURLConnection) imageUrl.openConnection();
+                connection.setDoInput(true);
+                connection.setConnectTimeout(30000);
+                connection.setReadTimeout(30000);
+                connection.connect();
+                
+                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    inputStream = connection.getInputStream();
+                    bmp = BitmapFactory.decodeStream(inputStream);
+                }
             } catch (IOException e) {
-                Log.e(TAG, "❌ Download failed: " + e.getMessage());
                 e.printStackTrace();
+            } finally {
+                try {
+                    if (inputStream != null) inputStream.close();
+                    if (connection != null) connection.disconnect();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
+            
             return bmp;
+        }
+    }
+
+    /**
+     * Downloads video/GIF to cache directory
+     * LiveWallpaperService will read from this location
+     */
+    private class DownloadVideoCallable implements Callable<Boolean> {
+        private String url;
+        private String type;
+
+        private DownloadVideoCallable(String url, String type) {
+            this.url = url;
+            this.type = type;
+        }
+
+        @Override
+        public Boolean call() {
+            HttpURLConnection connection = null;
+            InputStream inputStream = null;
+            FileOutputStream outputStream = null;
+            
+            try {
+                Log.d(TAG, "⬇️ Downloading " + type.toUpperCase() + " from: " + url);
+                
+                URL videoUrl = new URL(this.url);
+                connection = (HttpURLConnection) videoUrl.openConnection();
+                connection.setDoInput(true);
+                connection.setConnectTimeout(60000);
+                connection.setReadTimeout(60000);
+                connection.connect();
+                
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    Log.e(TAG, "❌ HTTP error: " + connection.getResponseCode());
+                    return false;
+                }
+                
+                // Save to app's cache directory
+                File cacheDir = getContext().getCacheDir();
+                String fileName = "live_wallpaper." + type;
+                File videoFile = new File(cacheDir, fileName);
+                
+                inputStream = connection.getInputStream();
+                outputStream = new FileOutputStream(videoFile);
+                
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long totalBytes = 0;
+                
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                    totalBytes += bytesRead;
+                }
+                
+                outputStream.flush();
+                
+                Log.d(TAG, "✅ Downloaded " + totalBytes + " bytes");
+                Log.d(TAG, "💾 Saved to: " + videoFile.getAbsolutePath());
+                
+                // Save path for LiveWallpaperService to use
+                getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("live_wallpaper_path", videoFile.getAbsolutePath())
+                    .putString("live_wallpaper_type", type)
+                    .apply();
+                
+                return true;
+                
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Download error: " + e.getMessage());
+                e.printStackTrace();
+                return false;
+            } finally {
+                try {
+                    if (outputStream != null) outputStream.close();
+                    if (inputStream != null) inputStream.close();
+                    if (connection != null) connection.disconnect();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
     }
 
@@ -230,20 +384,16 @@ public class WallpaperPlugin extends Plugin {
 
         @Override
         public void run() {
-            Log.d(TAG, "🖼️ Setting wallpaper...");
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 wallpaperManager.setBitmap(bmp);
-                Log.d(TAG, "✅ Wallpaper set successfully");
+                JSObject result = new JSObject();
+                result.put("success", true);
+                callbackContext.resolve(result);
             } catch (IOException e) {
-                Log.e(TAG, "❌ Failed to set wallpaper: " + e.getMessage());
                 callbackContext.reject(e.getMessage());
                 e.printStackTrace();
-                return;
             }
-            JSObject result = new JSObject();
-            result.put("success", true);
-            callbackContext.resolve(result);
         }
     }
 
@@ -258,20 +408,20 @@ public class WallpaperPlugin extends Plugin {
 
         @Override
         public void run() {
-            Log.d(TAG, "🔒 Setting lock screen wallpaper...");
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
-                wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
-                Log.d(TAG, "✅ Lock screen set successfully");
+                if (IS_NOUGAT_OR_GREATER) {
+                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
+                } else {
+                    wallpaperManager.setBitmap(bmp);
+                }
+                JSObject result = new JSObject();
+                result.put("success", true);
+                callbackContext.resolve(result);
             } catch (IOException e) {
-                Log.e(TAG, "❌ Failed: " + e.getMessage());
                 callbackContext.reject(e.getMessage());
                 e.printStackTrace();
-                return;
             }
-            JSObject result = new JSObject();
-            result.put("success", true);
-            callbackContext.resolve(result);
         }
     }
 
@@ -286,21 +436,19 @@ public class WallpaperPlugin extends Plugin {
 
         @Override
         public void run() {
-            Log.d(TAG, "🖼️ Setting both wallpapers...");
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 wallpaperManager.setBitmap(bmp);
-                wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
-                Log.d(TAG, "✅ Both wallpapers set successfully");
+                if (IS_NOUGAT_OR_GREATER) {
+                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);
+                }
+                JSObject result = new JSObject();
+                result.put("success", true);
+                callbackContext.resolve(result);
             } catch (IOException e) {
-                Log.e(TAG, "❌ Failed: " + e.getMessage());
                 callbackContext.reject(e.getMessage());
                 e.printStackTrace();
-                return;
             }
-            JSObject result = new JSObject();
-            result.put("success", true);
-            callbackContext.resolve(result);
         }
     }
 }
