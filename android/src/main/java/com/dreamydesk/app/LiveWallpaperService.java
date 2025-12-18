@@ -52,8 +52,9 @@ public class LiveWallpaperService extends WallpaperService {
 
         VideoWallpaperEngine() {
             holder = getSurfaceHolder();
-            loadWallpaperFromFile();
         }
+
+        
 
         /**
          * Load video/GIF from the file path saved by WallpaperPlugin
@@ -180,6 +181,10 @@ public class LiveWallpaperService extends WallpaperService {
         public void onSurfaceCreated(SurfaceHolder holder) {
             super.onSurfaceCreated(holder);
             Log.d(TAG, "🖼️ Surface created");
+            this.holder = holder;
+
+             // ✅ ADD THIS LINE
+            loadWallpaperFromFile();
         }
 
         @Override
