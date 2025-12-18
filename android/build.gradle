@@ -1,0 +1,15 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace "com.dreamydesk.app"
+    compileSdkVersion 35
+
+    defaultConfig {
+        minSdkVersion 23
+        targetSdkVersion 34
+    }
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+}
