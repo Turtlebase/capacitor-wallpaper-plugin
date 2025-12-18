@@ -45,7 +45,6 @@ public class WallpaperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-		setRetainInstance(true);
         Log.d(TAG, "✅ WallpaperPlugin loaded successfully!");
     }
 
