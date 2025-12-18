@@ -228,7 +228,8 @@ public class WallpaperPlugin extends Plugin {
                 new ComponentName(getContext(), LiveWallpaperService.class)
             );
             
-            getActivity().startActivity(intent);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
             
             JSObject result = new JSObject();
             result.put("success", true);
