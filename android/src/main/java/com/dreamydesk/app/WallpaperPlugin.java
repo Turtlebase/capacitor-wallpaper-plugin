@@ -45,6 +45,7 @@ public class WallpaperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
+		setRetainInstance(true);
         Log.d(TAG, "✅ WallpaperPlugin loaded successfully!");
     }
 
@@ -228,8 +229,12 @@ public class WallpaperPlugin extends Plugin {
                 new ComponentName(getContext(), LiveWallpaperService.class)
             );
             
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(intent);
+            intent.addFlags(
+    			Intent.FLAG_ACTIVITY_NO_ANIMATION |
+    			Intent.FLAG_ACTIVITY_SINGLE_TOP
+			);
+
+				getContext().startActivity(intent);
             
             JSObject result = new JSObject();
             result.put("success", true);
