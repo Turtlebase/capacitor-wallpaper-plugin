@@ -59,9 +59,7 @@ public class WallpaperPlugin extends Plugin {
     public void setImageAsWallpaper(PluginCall call) {
         Log.d(TAG, "📱 setImageAsWallpaper called");
         
-        context = IS_NOUGAT_OR_GREATER ? 
-                getActivity().getWindow().getContext() : 
-                getActivity().getApplicationContext();
+        context = getContext();
 
         String url = call.getString("url");
         
@@ -96,9 +94,7 @@ public class WallpaperPlugin extends Plugin {
     public void setImageAsLockScreen(PluginCall call) {
         Log.d(TAG, "📱 setImageAsLockScreen called");
         
-        context = IS_NOUGAT_OR_GREATER ? 
-                getActivity().getWindow().getContext() : 
-                getActivity().getApplicationContext();
+        context = getContext();
 
         String url = call.getString("url");
         
@@ -133,9 +129,7 @@ public class WallpaperPlugin extends Plugin {
     public void setImageAsWallpaperAndLockScreen(PluginCall call) {
         Log.d(TAG, "📱 setImageAsWallpaperAndLockScreen called");
         
-        context = IS_NOUGAT_OR_GREATER ? 
-                getActivity().getWindow().getContext() : 
-                getActivity().getApplicationContext();
+        context = getContext();
 
         String url = call.getString("url");
         
