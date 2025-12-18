@@ -10,15 +10,13 @@ import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.SurfaceHolder;
 
-import java.io.BufferedInputStream;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.FileInputStream;
 
 /**
- * Live Wallpaper Service supporting both GIF and MP4 formats
+ * Live Wallpaper Service
+ * Reads video/GIF from file path (already downloaded by WallpaperPlugin)
+ * Supports both GIF and MP4 formats
  */
 public class LiveWallpaperService extends WallpaperService {
 
@@ -26,7 +24,7 @@ public class LiveWallpaperService extends WallpaperService {
 
     @Override
     public Engine onCreateEngine() {
-        Log.d(TAG, "Creating wallpaper engine");
+        Log.d(TAG, "🎬 Creating wallpaper engine");
         return new VideoWallpaperEngine();
     }
 
@@ -54,57 +52,51 @@ public class LiveWallpaperService extends WallpaperService {
 
         VideoWallpaperEngine() {
             holder = getSurfaceHolder();
-            loadWallpaperFromUrl();
+            loadWallpaperFromFile();
         }
 
-        private void loadWallpaperFromUrl() {
+        /**
+         * Load video/GIF from the file path saved by WallpaperPlugin
+         */
+        private void loadWallpaperFromFile() {
             SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
-            String wallpaperUrl = prefs.getString("live_wallpaper_url", null);
+            String filePath = prefs.getString("live_wallpaper_path", null);
             wallpaperType = prefs.getString("live_wallpaper_type", "gif");
 
-            if (wallpaperUrl == null) {
-                Log.e(TAG, "No wallpaper URL provided");
+            if (filePath == null) {
+                Log.e(TAG, "❌ No wallpaper file path found");
                 return;
             }
 
-            Log.d(TAG, "Loading " + wallpaperType + " from: " + wallpaperUrl);
+            Log.d(TAG, "📂 Loading " + wallpaperType.toUpperCase() + " from: " + filePath);
 
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        if ("gif".equalsIgnoreCase(wallpaperType)) {
-                            loadGIF(wallpaperUrl);
-                        } else if ("mp4".equalsIgnoreCase(wallpaperType)) {
-                            loadMP4(wallpaperUrl);
-                        } else {
-                            Log.e(TAG, "Unsupported type: " + wallpaperType);
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error loading wallpaper: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                }
-            }).start();
+            File wallpaperFile = new File(filePath);
+            if (!wallpaperFile.exists()) {
+                Log.e(TAG, "❌ File not found: " + filePath);
+                return;
+            }
+
+            // Load based on type
+            if ("gif".equalsIgnoreCase(wallpaperType)) {
+                loadGIFFromFile(wallpaperFile);
+            } else if ("mp4".equalsIgnoreCase(wallpaperType)) {
+                loadMP4FromFile(wallpaperFile);
+            }
         }
 
-        private void loadGIF(String gifUrl) {
+        /**
+         * Load GIF from file
+         */
+        private void loadGIFFromFile(File gifFile) {
             try {
-                Log.d(TAG, "Downloading GIF...");
-                URL url = new URL(gifUrl);
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                connection.setDoInput(true);
-                connection.setConnectTimeout(30000);
-                connection.setReadTimeout(30000);
-                connection.connect();
-
-                InputStream input = new BufferedInputStream(connection.getInputStream());
-                movie = Movie.decodeStream(input);
-                input.close();
-                connection.disconnect();
+                Log.d(TAG, "📂 Loading GIF from file...");
+                
+                FileInputStream fis = new FileInputStream(gifFile);
+                movie = Movie.decodeStream(fis);
+                fis.close();
 
                 if (movie != null) {
-                    Log.d(TAG, "✅ GIF loaded successfully. Duration: " + movie.duration() + "ms");
+                    Log.d(TAG, "✅ GIF loaded - Duration: " + movie.duration() + "ms");
                     handler.post(drawRunner);
                 } else {
                     Log.e(TAG, "❌ Failed to decode GIF");
@@ -115,62 +107,23 @@ public class LiveWallpaperService extends WallpaperService {
             }
         }
 
-        private void loadMP4(String videoUrl) {
+        /**
+         * Load MP4 from file
+         */
+        private void loadMP4FromFile(File mp4File) {
             try {
-                Log.d(TAG, "Downloading MP4...");
+                Log.d(TAG, "📂 Loading MP4 from file...");
                 
-                // Download video to cache directory
-                URL url = new URL(videoUrl);
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                connection.setDoInput(true);
-                connection.setConnectTimeout(30000);
-                connection.setReadTimeout(30000);
-                connection.connect();
-
-                // Save to cache
-                File cacheDir = getCacheDir();
-                File videoFile = new File(cacheDir, "live_wallpaper.mp4");
-
-                InputStream input = new BufferedInputStream(connection.getInputStream());
-                FileOutputStream output = new FileOutputStream(videoFile);
-
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                long totalBytes = 0;
-
-                while ((bytesRead = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, bytesRead);
-                    totalBytes += bytesRead;
-                }
-
-                output.flush();
-                output.close();
-                input.close();
-                connection.disconnect();
-
-                Log.d(TAG, "✅ MP4 downloaded: " + totalBytes + " bytes");
-
-                // Initialize MediaPlayer
-                setupMediaPlayer(videoFile.getAbsolutePath());
-
-            } catch (Exception e) {
-                Log.e(TAG, "❌ Error loading MP4: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-
-        private void setupMediaPlayer(String videoPath) {
-            try {
                 mediaPlayer = new MediaPlayer();
-                mediaPlayer.setDataSource(videoPath);
+                mediaPlayer.setDataSource(mp4File.getAbsolutePath());
                 mediaPlayer.setSurface(holder.getSurface());
                 mediaPlayer.setLooping(true);
-                mediaPlayer.setVolume(0f, 0f); // Mute the video
+                mediaPlayer.setVolume(0f, 0f); // Mute
                 
                 mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                     @Override
                     public void onPrepared(MediaPlayer mp) {
-                        Log.d(TAG, "✅ MediaPlayer prepared. Duration: " + mp.getDuration() + "ms");
+                        Log.d(TAG, "✅ MediaPlayer prepared - Duration: " + mp.getDuration() + "ms");
                         if (visible) {
                             mp.start();
                             Log.d(TAG, "▶️ MP4 playback started");
@@ -181,17 +134,7 @@ public class LiveWallpaperService extends WallpaperService {
                 mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                     @Override
                     public boolean onError(MediaPlayer mp, int what, int extra) {
-                        Log.e(TAG, "❌ MediaPlayer error: what=" + what + " extra=" + extra);
-                        return false;
-                    }
-                });
-
-                mediaPlayer.setOnInfoListener(new MediaPlayer.OnInfoListener() {
-                    @Override
-                    public boolean onInfo(MediaPlayer mp, int what, int extra) {
-                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
-                            Log.d(TAG, "✅ Video rendering started");
-                        }
+                        Log.e(TAG, "❌ MediaPlayer error: " + what + ", " + extra);
                         return false;
                     }
                 });
@@ -199,7 +142,7 @@ public class LiveWallpaperService extends WallpaperService {
                 mediaPlayer.prepareAsync();
 
             } catch (Exception e) {
-                Log.e(TAG, "❌ Error setting up MediaPlayer: " + e.getMessage());
+                Log.e(TAG, "❌ Error loading MP4: " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -209,28 +152,26 @@ public class LiveWallpaperService extends WallpaperService {
             this.visible = visible;
             
             if ("gif".equalsIgnoreCase(wallpaperType)) {
-                // Handle GIF visibility
                 if (visible) {
                     handler.post(drawRunner);
                 } else {
                     handler.removeCallbacks(drawRunner);
                 }
             } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                // Handle MP4 visibility
                 try {
                     if (visible) {
                         if (!mediaPlayer.isPlaying()) {
                             mediaPlayer.start();
-                            Log.d(TAG, "▶️ MP4 playback resumed");
+                            Log.d(TAG, "▶️ Resumed");
                         }
                     } else {
                         if (mediaPlayer.isPlaying()) {
                             mediaPlayer.pause();
-                            Log.d(TAG, "⏸️ MP4 playback paused");
+                            Log.d(TAG, "⏸️ Paused");
                         }
                     }
                 } catch (IllegalStateException e) {
-                    Log.e(TAG, "Error changing playback state: " + e.getMessage());
+                    Log.e(TAG, "Error: " + e.getMessage());
                 }
             }
         }
@@ -238,18 +179,17 @@ public class LiveWallpaperService extends WallpaperService {
         @Override
         public void onSurfaceCreated(SurfaceHolder holder) {
             super.onSurfaceCreated(holder);
-            Log.d(TAG, "Surface created");
+            Log.d(TAG, "🖼️ Surface created");
         }
 
         @Override
         public void onSurfaceDestroyed(SurfaceHolder holder) {
             super.onSurfaceDestroyed(holder);
-            Log.d(TAG, "Surface destroyed");
+            Log.d(TAG, "🗑️ Surface destroyed");
             
             this.visible = false;
             handler.removeCallbacks(drawRunner);
             
-            // Clean up MediaPlayer
             if (mediaPlayer != null) {
                 try {
                     if (mediaPlayer.isPlaying()) {
@@ -259,7 +199,7 @@ public class LiveWallpaperService extends WallpaperService {
                     mediaPlayer = null;
                     Log.d(TAG, "✅ MediaPlayer released");
                 } catch (Exception e) {
-                    Log.e(TAG, "Error releasing MediaPlayer: " + e.getMessage());
+                    Log.e(TAG, "Error releasing: " + e.getMessage());
                 }
             }
         }
@@ -267,11 +207,10 @@ public class LiveWallpaperService extends WallpaperService {
         @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.onSurfaceChanged(holder, format, width, height);
-            Log.d(TAG, "Surface changed: " + width + "x" + height);
+            Log.d(TAG, "📐 Surface: " + width + "x" + height);
             
             this.holder = holder;
             
-            // For MP4, update surface
             if (mediaPlayer != null) {
                 mediaPlayer.setSurface(holder.getSurface());
             }
@@ -291,35 +230,29 @@ public class LiveWallpaperService extends WallpaperService {
                     int width = canvas.getWidth();
                     int height = canvas.getHeight();
 
-                    // Calculate current frame
                     long now = android.os.SystemClock.uptimeMillis();
                     if (movieStart == 0) {
                         movieStart = now;
                     }
 
                     int duration = movie.duration();
-                    if (duration == 0) {
-                        duration = 1000; // Default 1 second if duration is 0
-                    }
+                    if (duration == 0) duration = 1000;
 
                     int relTime = (int) ((now - movieStart) % duration);
                     movie.setTime(relTime);
 
-                    // Scale to fill screen while maintaining aspect ratio
+                    // Scale to fill screen
                     float scaleX = (float) width / movie.width();
                     float scaleY = (float) height / movie.height();
                     float scale = Math.max(scaleX, scaleY);
 
-                    // Center the GIF
                     float scaledWidth = movie.width() * scale;
                     float scaledHeight = movie.height() * scale;
                     float left = (width - scaledWidth) / 2;
                     float top = (height - scaledHeight) / 2;
 
-                    // Clear canvas
+                    // Draw
                     canvas.drawColor(android.graphics.Color.BLACK);
-
-                    // Draw GIF
                     canvas.save();
                     canvas.translate(left, top);
                     canvas.scale(scale, scale);
@@ -332,7 +265,6 @@ public class LiveWallpaperService extends WallpaperService {
                 }
             }
 
-            // Schedule next frame
             handler.removeCallbacks(drawRunner);
             if (visible) {
                 handler.postDelayed(drawRunner, frameDuration);
