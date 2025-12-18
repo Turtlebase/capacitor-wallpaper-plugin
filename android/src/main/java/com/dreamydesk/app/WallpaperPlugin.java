@@ -419,12 +419,6 @@ public class WallpaperPlugin extends Plugin {
                 bmp,
                 null,
                 true,
-                WallpaperManager.FLAG_SYSTEM
-            );
-            wallpaperManager.setBitmap(
-                bmp,
-                null,
-                true,
                 WallpaperManager.FLAG_LOCK
             );
         } else {
