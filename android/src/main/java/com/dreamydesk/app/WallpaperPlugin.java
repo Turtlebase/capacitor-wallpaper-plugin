@@ -229,11 +229,11 @@ public class WallpaperPlugin extends Plugin {
             );
             
             intent.addFlags(
-    			Intent.FLAG_ACTIVITY_NO_ANIMATION |
-    			Intent.FLAG_ACTIVITY_SINGLE_TOP
-			);
+                Intent.FLAG_ACTIVITY_NO_ANIMATION |
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            );
 
-				getContext().startActivity(intent);
+            getContext().startActivity(intent);
             
             JSObject result = new JSObject();
             result.put("success", true);
@@ -352,6 +352,7 @@ public class WallpaperPlugin extends Plugin {
                     .edit()
                     .putString("live_wallpaper_path", videoFile.getAbsolutePath())
                     .putString("live_wallpaper_type", type)
+                    .putLong("wallpaper_timestamp", System.currentTimeMillis()) // ✅ ADD TIMESTAMP
                     .apply();
                 
                 return true;
@@ -387,13 +388,13 @@ public class WallpaperPlugin extends Plugin {
             try {
                 if (IS_NOUGAT_OR_GREATER) {
                     wallpaperManager.setBitmap(
-                    	bmp,
-    				    null,
-      				    true,
-        				WallpaperManager.FLAG_SYSTEM   // ✅ HOME ONLY
-  				   );
-				} else {
-   						 wallpaperManager.setBitmap(bmp);
+                        bmp,
+                        null,
+                        true,
+                        WallpaperManager.FLAG_SYSTEM   // ✅ HOME ONLY
+                    );
+                } else {
+                    wallpaperManager.setBitmap(bmp);
                 }
                 JSObject result = new JSObject();
                 result.put("success", true);
@@ -419,14 +420,14 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
-            wallpaperManager.setBitmap(
-                bmp,
-                null,
-                true,
-                WallpaperManager.FLAG_LOCK
-            );
-        } else {
-            wallpaperManager.setBitmap(bmp);
+                    wallpaperManager.setBitmap(
+                        bmp,
+                        null,
+                        true,
+                        WallpaperManager.FLAG_LOCK
+                    );
+                } else {
+                    wallpaperManager.setBitmap(bmp);
                 }
                 JSObject result = new JSObject();
                 result.put("success", true);
@@ -452,9 +453,9 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 wallpaperManager.setBitmap(bmp);  
-         if (IS_NOUGAT_OR_GREATER) {  
-             wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);  
-         }  
+                if (IS_NOUGAT_OR_GREATER) {  
+                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);  
+                }  
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
