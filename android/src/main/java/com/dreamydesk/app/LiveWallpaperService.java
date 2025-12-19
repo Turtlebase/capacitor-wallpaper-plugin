@@ -17,6 +17,8 @@ import java.io.FileInputStream;
  * Live Wallpaper Service
  * Reads video/GIF from file path (already downloaded by WallpaperPlugin)
  * Supports both GIF and MP4 formats
+ * 
+ * ✅ FIXED: Properly switches between live wallpapers without keeping old frame
  */
 public class LiveWallpaperService extends WallpaperService {
 
@@ -42,6 +44,11 @@ public class LiveWallpaperService extends WallpaperService {
         private boolean visible = true;
         private SurfaceHolder holder;
         private String wallpaperType;
+        
+        // ✅ NEW: Track loaded wallpaper to detect changes
+        private String lastLoadedPath = null;
+        private String lastLoadedType = null;
+        private long lastLoadedTimestamp = 0;
 
         private final Runnable drawRunner = new Runnable() {
             @Override
@@ -54,7 +61,33 @@ public class LiveWallpaperService extends WallpaperService {
             holder = getSurfaceHolder();
         }
 
-        
+        /**
+         * ✅ NEW: Clean up all resources before loading new wallpaper
+         */
+        private void cleanupResources() {
+            Log.d(TAG, "🧹 Cleaning up old resources");
+            
+            // Stop GIF drawing
+            handler.removeCallbacks(drawRunner);
+            movieStart = 0;
+            
+            // Release MediaPlayer
+            if (mediaPlayer != null) {
+                try {
+                    if (mediaPlayer.isPlaying()) {
+                        mediaPlayer.stop();
+                    }
+                    mediaPlayer.release();
+                    mediaPlayer = null;
+                    Log.d(TAG, "✅ MediaPlayer released");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error releasing MediaPlayer: " + e.getMessage());
+                }
+            }
+            
+            // Clear Movie
+            movie = null;
+        }
 
         /**
          * Load video/GIF from the file path saved by WallpaperPlugin
@@ -63,6 +96,7 @@ public class LiveWallpaperService extends WallpaperService {
             SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
             String filePath = prefs.getString("live_wallpaper_path", null);
             wallpaperType = prefs.getString("live_wallpaper_type", "gif");
+            long timestamp = prefs.getLong("wallpaper_timestamp", 0);
 
             if (filePath == null) {
                 Log.e(TAG, "❌ No wallpaper file path found");
@@ -76,6 +110,11 @@ public class LiveWallpaperService extends WallpaperService {
                 Log.e(TAG, "❌ File not found: " + filePath);
                 return;
             }
+
+            // ✅ Update tracking variables
+            lastLoadedPath = filePath;
+            lastLoadedType = wallpaperType;
+            lastLoadedTimestamp = timestamp;
 
             // Load based on type
             if ("gif".equalsIgnoreCase(wallpaperType)) {
@@ -148,31 +187,74 @@ public class LiveWallpaperService extends WallpaperService {
             }
         }
 
+        /**
+         * ✅ FIXED: Check if wallpaper changed and reload if necessary
+         */
         @Override
         public void onVisibilityChanged(boolean visible) {
             this.visible = visible;
             
-            if ("gif".equalsIgnoreCase(wallpaperType)) {
-                if (visible) {
-                    handler.post(drawRunner);
-                } else {
-                    handler.removeCallbacks(drawRunner);
+            if (visible) {
+                // ✅ Check if wallpaper file has changed
+                SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
+                String currentPath = prefs.getString("live_wallpaper_path", null);
+                String currentType = prefs.getString("live_wallpaper_type", "gif");
+                long currentTimestamp = prefs.getLong("wallpaper_timestamp", 0);
+                
+                // Detect if wallpaper changed
+                boolean needsReload = false;
+                
+                if (currentPath != null) {
+                    // Check if path changed
+                    if (lastLoadedPath == null || !lastLoadedPath.equals(currentPath)) {
+                        needsReload = true;
+                        Log.d(TAG, "🔄 Path changed: " + lastLoadedPath + " -> " + currentPath);
+                    }
+                    // Check if type changed
+                    if (lastLoadedType == null || !lastLoadedType.equals(currentType)) {
+                        needsReload = true;
+                        Log.d(TAG, "🔄 Type changed: " + lastLoadedType + " -> " + currentType);
+                    }
+                    // Check if timestamp changed (new wallpaper downloaded)
+                    if (currentTimestamp > lastLoadedTimestamp) {
+                        needsReload = true;
+                        Log.d(TAG, "🔄 Timestamp changed: " + lastLoadedTimestamp + " -> " + currentTimestamp);
+                    }
                 }
-            } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                try {
-                    if (visible) {
+                
+                // If wallpaper changed, cleanup and reload
+                if (needsReload) {
+                    Log.d(TAG, "🔄 Wallpaper changed - reloading");
+                    cleanupResources();
+                    loadWallpaperFromFile();
+                }
+                
+                // Resume playback
+                if ("gif".equalsIgnoreCase(wallpaperType) && movie != null) {
+                    handler.post(drawRunner);
+                } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
+                    try {
                         if (!mediaPlayer.isPlaying()) {
                             mediaPlayer.start();
-                            Log.d(TAG, "▶️ Resumed");
+                            Log.d(TAG, "▶️ Resumed MP4");
                         }
-                    } else {
+                    } catch (IllegalStateException e) {
+                        Log.e(TAG, "Error resuming: " + e.getMessage());
+                    }
+                }
+            } else {
+                // Pause playback
+                if ("gif".equalsIgnoreCase(wallpaperType)) {
+                    handler.removeCallbacks(drawRunner);
+                } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
+                    try {
                         if (mediaPlayer.isPlaying()) {
                             mediaPlayer.pause();
-                            Log.d(TAG, "⏸️ Paused");
+                            Log.d(TAG, "⏸️ Paused MP4");
                         }
+                    } catch (IllegalStateException e) {
+                        Log.e(TAG, "Error pausing: " + e.getMessage());
                     }
-                } catch (IllegalStateException e) {
-                    Log.e(TAG, "Error: " + e.getMessage());
                 }
             }
         }
@@ -183,7 +265,7 @@ public class LiveWallpaperService extends WallpaperService {
             Log.d(TAG, "🖼️ Surface created");
             this.holder = holder;
 
-             // ✅ ADD THIS LINE
+            // ✅ Load wallpaper when surface is created
             loadWallpaperFromFile();
         }
 
@@ -193,26 +275,15 @@ public class LiveWallpaperService extends WallpaperService {
             Log.d(TAG, "🗑️ Surface destroyed");
             
             this.visible = false;
-            handler.removeCallbacks(drawRunner);
             
-            if (mediaPlayer != null) {
-                try {
-                    if (mediaPlayer.isPlaying()) {
-                        mediaPlayer.stop();
-                    }
-                    mediaPlayer.release();
-                    mediaPlayer = null;
-                    Log.d(TAG, "✅ MediaPlayer released");
-                } catch (Exception e) {
-                    Log.e(TAG, "Error releasing: " + e.getMessage());
-                }
-            }
+            // ✅ Clean up all resources
+            cleanupResources();
         }
 
         @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.onSurfaceChanged(holder, format, width, height);
-            Log.d(TAG, "📐 Surface: " + width + "x" + height);
+            Log.d(TAG, "📐 Surface changed: " + width + "x" + height);
             
             this.holder = holder;
             
