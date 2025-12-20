@@ -19,6 +19,7 @@ import java.io.FileInputStream;
  * Supports both GIF and MP4 formats
  * 
  * ✅ FIXED: Properly switches between live wallpapers without keeping old frame
+ * ✅ FIXED: GIF scaling now uses CENTER-CROP (no stretching)
  */
 public class LiveWallpaperService extends WallpaperService {
 
@@ -195,65 +196,43 @@ public class LiveWallpaperService extends WallpaperService {
             this.visible = visible;
             
             if (visible) {
-                // ✅ Check if wallpaper file has changed
                 SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
                 String currentPath = prefs.getString("live_wallpaper_path", null);
                 String currentType = prefs.getString("live_wallpaper_type", "gif");
                 long currentTimestamp = prefs.getLong("wallpaper_timestamp", 0);
                 
-                // Detect if wallpaper changed
                 boolean needsReload = false;
                 
                 if (currentPath != null) {
-                    // Check if path changed
                     if (lastLoadedPath == null || !lastLoadedPath.equals(currentPath)) {
                         needsReload = true;
-                        Log.d(TAG, "🔄 Path changed: " + lastLoadedPath + " -> " + currentPath);
                     }
-                    // Check if type changed
                     if (lastLoadedType == null || !lastLoadedType.equals(currentType)) {
                         needsReload = true;
-                        Log.d(TAG, "🔄 Type changed: " + lastLoadedType + " -> " + currentType);
                     }
-                    // Check if timestamp changed (new wallpaper downloaded)
                     if (currentTimestamp > lastLoadedTimestamp) {
                         needsReload = true;
-                        Log.d(TAG, "🔄 Timestamp changed: " + lastLoadedTimestamp + " -> " + currentTimestamp);
                     }
                 }
                 
-                // If wallpaper changed, cleanup and reload
                 if (needsReload) {
-                    Log.d(TAG, "🔄 Wallpaper changed - reloading");
                     cleanupResources();
                     loadWallpaperFromFile();
                 }
                 
-                // Resume playback
                 if ("gif".equalsIgnoreCase(wallpaperType) && movie != null) {
                     handler.post(drawRunner);
                 } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                    try {
-                        if (!mediaPlayer.isPlaying()) {
-                            mediaPlayer.start();
-                            Log.d(TAG, "▶️ Resumed MP4");
-                        }
-                    } catch (IllegalStateException e) {
-                        Log.e(TAG, "Error resuming: " + e.getMessage());
+                    if (!mediaPlayer.isPlaying()) {
+                        mediaPlayer.start();
                     }
                 }
             } else {
-                // Pause playback
                 if ("gif".equalsIgnoreCase(wallpaperType)) {
                     handler.removeCallbacks(drawRunner);
                 } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                    try {
-                        if (mediaPlayer.isPlaying()) {
-                            mediaPlayer.pause();
-                            Log.d(TAG, "⏸️ Paused MP4");
-                        }
-                    } catch (IllegalStateException e) {
-                        Log.e(TAG, "Error pausing: " + e.getMessage());
+                    if (mediaPlayer.isPlaying()) {
+                        mediaPlayer.pause();
                     }
                 }
             }
@@ -262,31 +241,21 @@ public class LiveWallpaperService extends WallpaperService {
         @Override
         public void onSurfaceCreated(SurfaceHolder holder) {
             super.onSurfaceCreated(holder);
-            Log.d(TAG, "🖼️ Surface created");
             this.holder = holder;
-
-            // ✅ Load wallpaper when surface is created
             loadWallpaperFromFile();
         }
 
         @Override
         public void onSurfaceDestroyed(SurfaceHolder holder) {
             super.onSurfaceDestroyed(holder);
-            Log.d(TAG, "🗑️ Surface destroyed");
-            
             this.visible = false;
-            
-            // ✅ Clean up all resources
             cleanupResources();
         }
 
         @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.onSurfaceChanged(holder, format, width, height);
-            Log.d(TAG, "📐 Surface changed: " + width + "x" + height);
-            
             this.holder = holder;
-            
             if (mediaPlayer != null) {
                 mediaPlayer.setSurface(holder.getSurface());
             }
@@ -298,6 +267,9 @@ public class LiveWallpaperService extends WallpaperService {
             }
         }
 
+        /**
+         * ✅ FIXED: TRUE CENTER-CROP (NO STRETCH)
+         */
         private void drawGIFFrame() {
             Canvas canvas = null;
             try {
@@ -307,27 +279,31 @@ public class LiveWallpaperService extends WallpaperService {
                     int height = canvas.getHeight();
 
                     long now = android.os.SystemClock.uptimeMillis();
-                    if (movieStart == 0) {
-                        movieStart = now;
-                    }
+                    if (movieStart == 0) movieStart = now;
 
                     int duration = movie.duration();
                     if (duration == 0) duration = 1000;
 
-                    int relTime = (int) ((now - movieStart) % duration);
-                    movie.setTime(relTime);
+                    movie.setTime((int) ((now - movieStart) % duration));
 
-                    // Scale to fill screen
-                    float scaleX = (float) width / movie.width();
-                    float scaleY = (float) height / movie.height();
-                    float scale = Math.max(scaleX, scaleY);
+                    int gifW = movie.width();
+                    int gifH = movie.height();
 
-                    float scaledWidth = movie.width() * scale;
-                    float scaledHeight = movie.height() * scale;
-                    float left = (width - scaledWidth) / 2;
-                    float top = (height - scaledHeight) / 2;
+                    float screenRatio = (float) width / height;
+                    float gifRatio = (float) gifW / gifH;
 
-                    // Draw
+                    float scale;
+                    float left = 0f;
+                    float top = 0f;
+
+                    if (gifRatio > screenRatio) {
+                        scale = (float) height / gifH;
+                        left = (width - gifW * scale) / 2f;
+                    } else {
+                        scale = (float) width / gifW;
+                        top = (height - gifH * scale) / 2f;
+                    }
+
                     canvas.drawColor(android.graphics.Color.BLACK);
                     canvas.save();
                     canvas.translate(left, top);
