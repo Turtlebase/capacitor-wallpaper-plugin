@@ -4,22 +4,23 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Movie;
-import android.media.MediaPlayer;
 import android.os.Handler;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.SurfaceHolder;
+
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.Player;
+import androidx.media3.exoplayer.ExoPlayer;
 
 import java.io.File;
 import java.io.FileInputStream;
 
 /**
  * Live Wallpaper Service
- * Reads video/GIF from file path (already downloaded by WallpaperPlugin)
- * Supports both GIF and MP4 formats
- * 
- * ✅ FIXED: Properly switches between live wallpapers without keeping old frame
- * ✅ FIXED: GIF scaling now uses CENTER-CROP (no stretching)
+ * Supports GIF + MP4
+ * MP4 uses ExoPlayer (Media3)
+ * GIF uses Movie (manual rendering)
  */
 public class LiveWallpaperService extends WallpaperService {
 
@@ -27,214 +28,194 @@ public class LiveWallpaperService extends WallpaperService {
 
     @Override
     public Engine onCreateEngine() {
-        Log.d(TAG, "🎬 Creating wallpaper engine");
         return new VideoWallpaperEngine();
     }
 
     private class VideoWallpaperEngine extends Engine {
-        private final int frameDuration = 40; // ~25 FPS for GIF
+
+        // ===== COMMON =====
         private final Handler handler = new Handler();
-        
-        // For GIF
+        private SurfaceHolder holder;
+        private boolean visible = true;
+
+        private String wallpaperType;
+        private String lastLoadedPath;
+        private String lastLoadedType;
+        private long lastLoadedTimestamp;
+
+        // ===== GIF =====
+        private static final int GIF_FRAME_DELAY = 40; // ~25 FPS
         private Movie movie;
         private long movieStart;
-        
-        // For MP4
-        private MediaPlayer mediaPlayer;
-        
-        private boolean visible = true;
-        private SurfaceHolder holder;
-        private String wallpaperType;
-        
-        // ✅ NEW: Track loaded wallpaper to detect changes
-        private String lastLoadedPath = null;
-        private String lastLoadedType = null;
-        private long lastLoadedTimestamp = 0;
 
-        private final Runnable drawRunner = new Runnable() {
-            @Override
-            public void run() {
-                draw();
-            }
-        };
+        // ===== MP4 (ExoPlayer) =====
+        private ExoPlayer exoPlayer;
+
+        private final Runnable drawRunner = this::draw;
 
         VideoWallpaperEngine() {
             holder = getSurfaceHolder();
         }
 
-        /**
-         * ✅ NEW: Clean up all resources before loading new wallpaper
-         */
+        // =========================================================
+        // CLEANUP
+        // =========================================================
         private void cleanupResources() {
-            Log.d(TAG, "🧹 Cleaning up old resources");
-            
-            // Stop GIF drawing
+            Log.d(TAG, "🧹 Cleaning up resources");
+
             handler.removeCallbacks(drawRunner);
-            movieStart = 0;
-            
-            // Release MediaPlayer
-            if (mediaPlayer != null) {
-                try {
-                    if (mediaPlayer.isPlaying()) {
-                        mediaPlayer.stop();
-                    }
-                    mediaPlayer.release();
-                    mediaPlayer = null;
-                    Log.d(TAG, "✅ MediaPlayer released");
-                } catch (Exception e) {
-                    Log.e(TAG, "Error releasing MediaPlayer: " + e.getMessage());
-                }
-            }
-            
-            // Clear Movie
             movie = null;
+            movieStart = 0;
+
+            if (exoPlayer != null) {
+                exoPlayer.stop();
+                exoPlayer.release();
+                exoPlayer = null;
+                Log.d(TAG, "✅ ExoPlayer released");
+            }
         }
 
-        /**
-         * Load video/GIF from the file path saved by WallpaperPlugin
-         */
+        // =========================================================
+        // LOAD WALLPAPER
+        // =========================================================
         private void loadWallpaperFromFile() {
             SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
+
             String filePath = prefs.getString("live_wallpaper_path", null);
             wallpaperType = prefs.getString("live_wallpaper_type", "gif");
             long timestamp = prefs.getLong("wallpaper_timestamp", 0);
 
             if (filePath == null) {
-                Log.e(TAG, "❌ No wallpaper file path found");
+                Log.e(TAG, "❌ No wallpaper path found");
                 return;
             }
 
-            Log.d(TAG, "📂 Loading " + wallpaperType.toUpperCase() + " from: " + filePath);
-
-            File wallpaperFile = new File(filePath);
-            if (!wallpaperFile.exists()) {
-                Log.e(TAG, "❌ File not found: " + filePath);
+            File file = new File(filePath);
+            if (!file.exists()) {
+                Log.e(TAG, "❌ Wallpaper file not found");
                 return;
             }
 
-            // ✅ Update tracking variables
             lastLoadedPath = filePath;
             lastLoadedType = wallpaperType;
             lastLoadedTimestamp = timestamp;
 
-            // Load based on type
+            cleanupResources();
+
             if ("gif".equalsIgnoreCase(wallpaperType)) {
-                loadGIFFromFile(wallpaperFile);
+                loadGIF(file);
             } else if ("mp4".equalsIgnoreCase(wallpaperType)) {
-                loadMP4FromFile(wallpaperFile);
+                loadMP4(file);
             }
         }
 
-        /**
-         * Load GIF from file
-         */
-        private void loadGIFFromFile(File gifFile) {
+        // =========================================================
+        // GIF
+        // =========================================================
+        private void loadGIF(File gifFile) {
             try {
-                Log.d(TAG, "📂 Loading GIF from file...");
-                
                 FileInputStream fis = new FileInputStream(gifFile);
                 movie = Movie.decodeStream(fis);
                 fis.close();
 
                 if (movie != null) {
-                    Log.d(TAG, "✅ GIF loaded - Duration: " + movie.duration() + "ms");
                     handler.post(drawRunner);
-                } else {
-                    Log.e(TAG, "❌ Failed to decode GIF");
+                    Log.d(TAG, "✅ GIF loaded");
                 }
             } catch (Exception e) {
-                Log.e(TAG, "❌ Error loading GIF: " + e.getMessage());
-                e.printStackTrace();
+                Log.e(TAG, "GIF load error", e);
             }
         }
 
-        /**
-         * Load MP4 from file
-         */
-        private void loadMP4FromFile(File mp4File) {
+        private void draw() {
+            if (visible && movie != null && "gif".equalsIgnoreCase(wallpaperType)) {
+                drawGIFFrame();
+            }
+        }
+
+        private void drawGIFFrame() {
+            Canvas canvas = null;
             try {
-                Log.d(TAG, "📂 Loading MP4 from file...");
-                
-                mediaPlayer = new MediaPlayer();
-                mediaPlayer.setDataSource(mp4File.getAbsolutePath());
-                mediaPlayer.setSurface(holder.getSurface());
-                mediaPlayer.setLooping(true);
-                mediaPlayer.setVolume(0f, 0f); // Mute
-                
-                mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                    @Override
-                    public void onPrepared(MediaPlayer mp) {
-                        Log.d(TAG, "✅ MediaPlayer prepared - Duration: " + mp.getDuration() + "ms");
-                        if (visible) {
-                            mp.start();
-                            Log.d(TAG, "▶️ MP4 playback started");
-                        }
-                    }
-                });
+                canvas = holder.lockCanvas();
+                if (canvas == null) return;
 
-                mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-                    @Override
-                    public boolean onError(MediaPlayer mp, int what, int extra) {
-                        Log.e(TAG, "❌ MediaPlayer error: " + what + ", " + extra);
-                        return false;
-                    }
-                });
+                int width = canvas.getWidth();
+                int height = canvas.getHeight();
 
-                mediaPlayer.prepareAsync();
+                long now = android.os.SystemClock.uptimeMillis();
+                if (movieStart == 0) movieStart = now;
 
-            } catch (Exception e) {
-                Log.e(TAG, "❌ Error loading MP4: " + e.getMessage());
-                e.printStackTrace();
+                int duration = movie.duration();
+                if (duration == 0) duration = 1000;
+
+                movie.setTime((int) ((now - movieStart) % duration));
+
+                int gifW = movie.width();
+                int gifH = movie.height();
+
+                float screenRatio = (float) width / height;
+                float gifRatio = (float) gifW / gifH;
+
+                float scale;
+                float dx = 0, dy = 0;
+
+                if (gifRatio > screenRatio) {
+                    scale = (float) height / gifH;
+                    dx = (width - gifW * scale) / 2f;
+                } else {
+                    scale = (float) width / gifW;
+                    dy = (height - gifH * scale) / 2f;
+                }
+
+                canvas.drawColor(android.graphics.Color.BLACK);
+                canvas.save();
+                canvas.translate(dx, dy);
+                canvas.scale(scale, scale);
+                movie.draw(canvas, 0, 0);
+                canvas.restore();
+
+            } finally {
+                if (canvas != null) holder.unlockCanvasAndPost(canvas);
             }
+
+            handler.removeCallbacks(drawRunner);
+            if (visible) handler.postDelayed(drawRunner, GIF_FRAME_DELAY);
         }
 
-        /**
-         * ✅ FIXED: Check if wallpaper changed and reload if necessary
-         */
+        // =========================================================
+        // MP4 (EXOPLAYER)
+        // =========================================================
+        private void loadMP4(File mp4File) {
+            Log.d(TAG, "🎬 Loading MP4 with ExoPlayer");
+
+            exoPlayer = new ExoPlayer.Builder(getApplicationContext()).build();
+            exoPlayer.setVideoSurface(holder.getSurface());
+            exoPlayer.setRepeatMode(Player.REPEAT_MODE_ONE);
+            exoPlayer.setVolume(0f);
+
+            MediaItem mediaItem = MediaItem.fromUri(mp4File.toURI().toString());
+            exoPlayer.setMediaItem(mediaItem);
+            exoPlayer.prepare();
+
+            if (visible) exoPlayer.play();
+        }
+
+        // =========================================================
+        // LIFECYCLE
+        // =========================================================
         @Override
         public void onVisibilityChanged(boolean visible) {
             this.visible = visible;
-            
+
             if (visible) {
-                SharedPreferences prefs = getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
-                String currentPath = prefs.getString("live_wallpaper_path", null);
-                String currentType = prefs.getString("live_wallpaper_type", "gif");
-                long currentTimestamp = prefs.getLong("wallpaper_timestamp", 0);
-                
-                boolean needsReload = false;
-                
-                if (currentPath != null) {
-                    if (lastLoadedPath == null || !lastLoadedPath.equals(currentPath)) {
-                        needsReload = true;
-                    }
-                    if (lastLoadedType == null || !lastLoadedType.equals(currentType)) {
-                        needsReload = true;
-                    }
-                    if (currentTimestamp > lastLoadedTimestamp) {
-                        needsReload = true;
-                    }
-                }
-                
-                if (needsReload) {
-                    cleanupResources();
-                    loadWallpaperFromFile();
-                }
-                
-                if ("gif".equalsIgnoreCase(wallpaperType) && movie != null) {
-                    handler.post(drawRunner);
-                } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                    if (!mediaPlayer.isPlaying()) {
-                        mediaPlayer.start();
-                    }
-                }
+                loadWallpaperFromFile();
+
+                if (exoPlayer != null) exoPlayer.play();
+                if (movie != null) handler.post(drawRunner);
+
             } else {
-                if ("gif".equalsIgnoreCase(wallpaperType)) {
-                    handler.removeCallbacks(drawRunner);
-                } else if ("mp4".equalsIgnoreCase(wallpaperType) && mediaPlayer != null) {
-                    if (mediaPlayer.isPlaying()) {
-                        mediaPlayer.pause();
-                    }
-                }
+                handler.removeCallbacks(drawRunner);
+                if (exoPlayer != null) exoPlayer.pause();
             }
         }
 
@@ -246,81 +227,20 @@ public class LiveWallpaperService extends WallpaperService {
         }
 
         @Override
-        public void onSurfaceDestroyed(SurfaceHolder holder) {
-            super.onSurfaceDestroyed(holder);
-            this.visible = false;
-            cleanupResources();
-        }
-
-        @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.onSurfaceChanged(holder, format, width, height);
             this.holder = holder;
-            if (mediaPlayer != null) {
-                mediaPlayer.setSurface(holder.getSurface());
+
+            if (exoPlayer != null) {
+                exoPlayer.setVideoSurface(holder.getSurface());
             }
         }
 
-        private void draw() {
-            if (visible && movie != null && "gif".equalsIgnoreCase(wallpaperType)) {
-                drawGIFFrame();
-            }
-        }
-
-        /**
-         * ✅ FIXED: TRUE CENTER-CROP (NO STRETCH)
-         */
-        private void drawGIFFrame() {
-            Canvas canvas = null;
-            try {
-                canvas = holder.lockCanvas();
-                if (canvas != null) {
-                    int width = canvas.getWidth();
-                    int height = canvas.getHeight();
-
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (movieStart == 0) movieStart = now;
-
-                    int duration = movie.duration();
-                    if (duration == 0) duration = 1000;
-
-                    movie.setTime((int) ((now - movieStart) % duration));
-
-                    int gifW = movie.width();
-                    int gifH = movie.height();
-
-                    float screenRatio = (float) width / height;
-                    float gifRatio = (float) gifW / gifH;
-
-                    float scale;
-                    float left = 0f;
-                    float top = 0f;
-
-                    if (gifRatio > screenRatio) {
-                        scale = (float) height / gifH;
-                        left = (width - gifW * scale) / 2f;
-                    } else {
-                        scale = (float) width / gifW;
-                        top = (height - gifH * scale) / 2f;
-                    }
-
-                    canvas.drawColor(android.graphics.Color.BLACK);
-                    canvas.save();
-                    canvas.translate(left, top);
-                    canvas.scale(scale, scale);
-                    movie.draw(canvas, 0, 0);
-                    canvas.restore();
-                }
-            } finally {
-                if (canvas != null) {
-                    holder.unlockCanvasAndPost(canvas);
-                }
-            }
-
-            handler.removeCallbacks(drawRunner);
-            if (visible) {
-                handler.postDelayed(drawRunner, frameDuration);
-            }
+        @Override
+        public void onSurfaceDestroyed(SurfaceHolder holder) {
+            super.onSurfaceDestroyed(holder);
+            visible = false;
+            cleanupResources();
         }
     }
 }
