@@ -345,10 +345,13 @@ public class WallpaperPlugin extends Plugin {
                 connection.setReadTimeout(60000);
                 connection.connect();
                 
-                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                    Log.e(TAG, "âŒ HTTP error: " + connection.getResponseCode());
-                    return false;
-                }
+                int responseCode = connection.getResponseCode();
+
+				if (responseCode != HttpURLConnection.HTTP_OK &&
+    			responseCode != HttpURLConnection.HTTP_PARTIAL) {
+   			    Log.e(TAG, "❌ HTTP error: " + responseCode);
+  			    return false;
+				}
                 
                 // Save to app's cache directory
                 File cacheDir = getContext().getCacheDir();
