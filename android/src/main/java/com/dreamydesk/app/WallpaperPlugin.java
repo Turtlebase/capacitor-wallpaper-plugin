@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Build;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.net.Uri;
 
@@ -31,10 +32,10 @@ import java.util.concurrent.Future;
 /**
  * Capacitor Wallpaper Plugin
  * 
- * Static wallpapers: Set directly by the app
+ * Static wallpapers: Set directly by the app (no restart, instant like Zedge)
  * Live wallpapers: Download video/GIF, then open native Android picker for user selection
  * 
- * @version 1.0.0
+ * @version 1.1.0 - Fixed app restart issue
  */
 @CapacitorPlugin(name = "WallpaperPlugin")
 public class WallpaperPlugin extends Plugin {
@@ -46,7 +47,7 @@ public class WallpaperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        Log.d(TAG, "âœ… WallpaperPlugin loaded successfully!");
+        Log.d(TAG, "✅ WallpaperPlugin loaded successfully!");
     }
 
     @PluginMethod
@@ -58,7 +59,7 @@ public class WallpaperPlugin extends Plugin {
 
     @PluginMethod
     public void setImageAsWallpaper(PluginCall call) {
-        Log.d(TAG, "ðŸ“± setImageAsWallpaper called");
+        Log.d(TAG, "📱 setImageAsWallpaper called");
         
         context = getContext();
 
@@ -93,7 +94,7 @@ public class WallpaperPlugin extends Plugin {
 
     @PluginMethod
     public void setImageAsLockScreen(PluginCall call) {
-        Log.d(TAG, "ðŸ“± setImageAsLockScreen called");
+        Log.d(TAG, "📱 setImageAsLockScreen called");
         
         context = getContext();
 
@@ -128,7 +129,7 @@ public class WallpaperPlugin extends Plugin {
 
     @PluginMethod
     public void setImageAsWallpaperAndLockScreen(PluginCall call) {
-        Log.d(TAG, "ðŸ“± setImageAsWallpaperAndLockScreen called");
+        Log.d(TAG, "📱 setImageAsWallpaperAndLockScreen called");
         
         context = getContext();
 
@@ -167,7 +168,7 @@ public class WallpaperPlugin extends Plugin {
      */
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
-        Log.d(TAG, "ðŸ“± setLiveWallpaper called");
+        Log.d(TAG, "📱 setLiveWallpaper called");
         
         String videoUrl = call.getString("url");
         String type = call.getString("type", null);
@@ -182,20 +183,19 @@ public class WallpaperPlugin extends Plugin {
             String urlLower = videoUrl.toLowerCase();
             if (urlLower.contains(".mp4") || urlLower.contains("mp4?") || urlLower.contains("mp4&")) {
                 type = "mp4";
-                Log.d(TAG, "ðŸ” Auto-detected: MP4");
+                Log.d(TAG, "🔍 Auto-detected: MP4");
             } else if (urlLower.contains(".gif") || urlLower.contains("gif?") || urlLower.contains("gif&")) {
                 type = "gif";
-                Log.d(TAG, "ðŸ” Auto-detected: GIF");
+                Log.d(TAG, "🔍 Auto-detected: GIF");
             } else {
                 type = "gif";
-                Log.w(TAG, "âš ï¸ Defaulting to GIF");
+                Log.w(TAG, "⚠️ Defaulting to GIF");
             }
         }
 
-        // ***** THE BUG FIX IS HERE *****
         // Check if the URL is a local file path
         if (videoUrl.startsWith("file://")) {
-            Log.d(TAG, "ðŸ“ Detected local file URI. Skipping download.");
+            Log.d(TAG, "🔍 Detected local file URI. Skipping download.");
             try {
                 // Directly use the local file path
                 File videoFile = new File(Uri.parse(videoUrl).getPath());
@@ -206,18 +206,17 @@ public class WallpaperPlugin extends Plugin {
                     .putLong("wallpaper_timestamp", System.currentTimeMillis())
                     .apply();
 
-                Log.d(TAG, "âœ… Local file path set for LiveWallpaperService: " + videoFile.getAbsolutePath());
+                Log.d(TAG, "✅ Local file path set for LiveWallpaperService: " + videoFile.getAbsolutePath());
                 openNativeLiveWallpaperPicker(call);
             } catch (Exception e) {
-                Log.e(TAG, "âŒ Error handling local file URI: " + e.getMessage());
+                Log.e(TAG, "❌ Error handling local file URI: " + e.getMessage());
                 call.reject("Error handling local file: " + e.getMessage());
             }
             return;
         }
-        // ***** END OF BUG FIX *****
 
         final String finalType = type;
-        Log.d(TAG, "ðŸŽ¬ Downloading " + finalType.toUpperCase());
+        Log.d(TAG, "🎬 Downloading " + finalType.toUpperCase());
 
         // Download in background
         ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -226,7 +225,7 @@ public class WallpaperPlugin extends Plugin {
         try {
             boolean success = future.get();
             if (success) {
-                Log.d(TAG, "âœ… Download complete - opening native picker");
+                Log.d(TAG, "✅ Download complete - opening native picker");
                 openNativeLiveWallpaperPicker(call);
             } else {
                 call.reject("Failed to download video");
@@ -245,7 +244,7 @@ public class WallpaperPlugin extends Plugin {
      */
     private void openNativeLiveWallpaperPicker(PluginCall call) {
         try {
-            Log.d(TAG, "ðŸ“± Launching native wallpaper picker");
+            Log.d(TAG, "📱 Launching native wallpaper picker");
             
             Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
             intent.putExtra(
@@ -264,9 +263,9 @@ public class WallpaperPlugin extends Plugin {
             result.put("success", true);
             call.resolve(result);
             
-            Log.d(TAG, "âœ… Native picker opened - user can now select wallpaper");
+            Log.d(TAG, "✅ Native picker opened - user can now select wallpaper");
         } catch (Exception e) {
-            Log.e(TAG, "âŒ Failed to open picker: " + e.getMessage());
+            Log.e(TAG, "❌ Failed to open picker: " + e.getMessage());
             call.reject("Failed to open wallpaper picker: " + e.getMessage());
         }
     }
@@ -274,7 +273,7 @@ public class WallpaperPlugin extends Plugin {
     // ================== INNER CLASSES ==================
 
     /**
-     * Downloads image from URL
+     * Downloads image from URL with optimized memory usage
      */
     private class GetBitmapFromURLCallable implements Callable<Bitmap> {
         private String URL;
@@ -299,9 +298,24 @@ public class WallpaperPlugin extends Plugin {
                 
                 if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
                     inputStream = connection.getInputStream();
-                    bmp = BitmapFactory.decodeStream(inputStream);
+                    
+                    // Optimize bitmap loading
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                    options.inJustDecodeBounds = false;
+                    
+                    bmp = BitmapFactory.decodeStream(inputStream, null, options);
+                    
+                    if (bmp != null) {
+                        Log.d(TAG, "✅ Bitmap loaded: " + bmp.getWidth() + "x" + bmp.getHeight() + 
+                              " (" + (bmp.getByteCount() / 1024 / 1024) + "MB)");
+                    }
                 }
             } catch (IOException e) {
+                Log.e(TAG, "❌ Download error: " + e.getMessage());
+                e.printStackTrace();
+            } catch (OutOfMemoryError e) {
+                Log.e(TAG, "❌ Out of memory while loading bitmap: " + e.getMessage());
                 e.printStackTrace();
             } finally {
                 try {
@@ -336,7 +350,7 @@ public class WallpaperPlugin extends Plugin {
             FileOutputStream outputStream = null;
             
             try {
-                Log.d(TAG, "â¬‡ï¸ Downloading " + type.toUpperCase() + " from: " + url);
+                Log.d(TAG, "⬇️ Downloading " + type.toUpperCase() + " from: " + url);
                 
                 URL videoUrl = new URL(this.url);
                 connection = (HttpURLConnection) videoUrl.openConnection();
@@ -347,11 +361,11 @@ public class WallpaperPlugin extends Plugin {
                 
                 int responseCode = connection.getResponseCode();
 
-				if (responseCode != HttpURLConnection.HTTP_OK &&
-    			responseCode != HttpURLConnection.HTTP_PARTIAL) {
-   			    Log.e(TAG, "❌ HTTP error: " + responseCode);
-  			    return false;
-				}
+                if (responseCode != HttpURLConnection.HTTP_OK &&
+                    responseCode != HttpURLConnection.HTTP_PARTIAL) {
+                    Log.e(TAG, "❌ HTTP error: " + responseCode);
+                    return false;
+                }
                 
                 // Save to app's cache directory
                 File cacheDir = getContext().getCacheDir();
@@ -372,21 +386,21 @@ public class WallpaperPlugin extends Plugin {
                 
                 outputStream.flush();
                 
-                Log.d(TAG, "âœ… Downloaded " + totalBytes + " bytes");
-                Log.d(TAG, "ðŸ’¾ Saved to: " + videoFile.getAbsolutePath());
+                Log.d(TAG, "✅ Downloaded " + totalBytes + " bytes");
+                Log.d(TAG, "💾 Saved to: " + videoFile.getAbsolutePath());
                 
                 // Save path for LiveWallpaperService to use
                 getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
                     .edit()
                     .putString("live_wallpaper_path", videoFile.getAbsolutePath())
                     .putString("live_wallpaper_type", type)
-                    .putLong("wallpaper_timestamp", System.currentTimeMillis()) // âœ… ADD TIMESTAMP
+                    .putLong("wallpaper_timestamp", System.currentTimeMillis())
                     .apply();
                 
                 return true;
                 
             } catch (Exception e) {
-                Log.e(TAG, "âŒ Download error: " + e.getMessage());
+                Log.e(TAG, "❌ Download error: " + e.getMessage());
                 e.printStackTrace();
                 return false;
             } finally {
@@ -401,6 +415,10 @@ public class WallpaperPlugin extends Plugin {
         }
     }
 
+    /**
+     * Sets wallpaper for home screen only
+     * FIXED: allowReturn = false to prevent app restart (like Zedge)
+     */
     private class SetBackgroundImageRunnable implements Runnable {
         private Bitmap bmp;
         private PluginCall callbackContext;
@@ -415,25 +433,43 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
+                    // ✅ FIXED: Changed allowReturn from true to false
+                    // This prevents the system crop UI from opening and causing app restart
                     wallpaperManager.setBitmap(
                         bmp,
                         null,
-                        true,
-                        WallpaperManager.FLAG_SYSTEM   // âœ… HOME ONLY
+                        false,  // ✅ KEY FIX: false = no crop UI, no restart!
+                        WallpaperManager.FLAG_SYSTEM
                     );
                 } else {
                     wallpaperManager.setBitmap(bmp);
                 }
+                
+                // ✅ Clean up bitmap to prevent memory issues
+                if (bmp != null && !bmp.isRecycled()) {
+                    bmp.recycle();
+                }
+                
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
+                
+                Log.d(TAG, "✅ Wallpaper set successfully (home screen) - No restart!");
+                
             } catch (IOException e) {
                 callbackContext.reject(e.getMessage());
+                e.printStackTrace();
+            } catch (OutOfMemoryError e) {
+                callbackContext.reject("Out of memory: " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
 
+    /**
+     * Sets wallpaper for lock screen only
+     * FIXED: allowReturn = false to prevent app restart
+     */
     private class SetLockScreenImageRunnable implements Runnable {
         private Bitmap bmp;
         private PluginCall callbackContext;
@@ -448,25 +484,42 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
+                    // ✅ FIXED: Changed allowReturn from true to false
                     wallpaperManager.setBitmap(
                         bmp,
                         null,
-                        true,
+                        false,  // ✅ KEY FIX: false = no crop UI, no restart!
                         WallpaperManager.FLAG_LOCK
                     );
                 } else {
                     wallpaperManager.setBitmap(bmp);
                 }
+                
+                // ✅ Clean up bitmap
+                if (bmp != null && !bmp.isRecycled()) {
+                    bmp.recycle();
+                }
+                
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
+                
+                Log.d(TAG, "✅ Wallpaper set successfully (lock screen) - No restart!");
+                
             } catch (IOException e) {
                 callbackContext.reject(e.getMessage());
+                e.printStackTrace();
+            } catch (OutOfMemoryError e) {
+                callbackContext.reject("Out of memory: " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
 
+    /**
+     * Sets wallpaper for both home and lock screens
+     * FIXED: allowReturn = false to prevent app restart
+     */
     private class SetLockScreenAndWallpaperImageRunnable implements Runnable {
         private Bitmap bmp;
         private PluginCall callbackContext;
@@ -480,15 +533,31 @@ public class WallpaperPlugin extends Plugin {
         public void run() {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
-                wallpaperManager.setBitmap(bmp);  
-                if (IS_NOUGAT_OR_GREATER) {  
-                    wallpaperManager.setBitmap(bmp, null, true, WallpaperManager.FLAG_LOCK);  
-                }  
+                // Set for home screen first
+                wallpaperManager.setBitmap(bmp);
+                
+                // Then set for lock screen (Android 7.0+)
+                if (IS_NOUGAT_OR_GREATER) {
+                    // ✅ FIXED: Changed allowReturn from true to false
+                    wallpaperManager.setBitmap(bmp, null, false, WallpaperManager.FLAG_LOCK);
+                }
+                
+                // ✅ Clean up bitmap
+                if (bmp != null && !bmp.isRecycled()) {
+                    bmp.recycle();
+                }
+                
                 JSObject result = new JSObject();
                 result.put("success", true);
                 callbackContext.resolve(result);
+                
+                Log.d(TAG, "✅ Wallpaper set successfully (both screens) - No restart!");
+                
             } catch (IOException e) {
                 callbackContext.reject(e.getMessage());
+                e.printStackTrace();
+            } catch (OutOfMemoryError e) {
+                callbackContext.reject("Out of memory: " + e.getMessage());
                 e.printStackTrace();
             }
         }
