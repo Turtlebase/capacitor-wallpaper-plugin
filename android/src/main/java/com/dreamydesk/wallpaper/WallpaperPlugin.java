@@ -4,7 +4,6 @@ import android.app.WallpaperManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 
@@ -30,70 +29,91 @@ public class WallpaperPlugin extends Plugin {
     }
 
     // =====================================================
-    // STATIC WALLPAPER (EXPECT RESTART ON ANDROID 12+)
+    // STATIC WALLPAPER - HOME SCREEN
     // =====================================================
-
+    
     @PluginMethod
-    public void setWallpaper(PluginCall call) {
+    public void setImageAsWallpaper(PluginCall call) {
+        setWallpaperInternal(call, WallpaperManager.FLAG_SYSTEM);
+    }
+
+    // =====================================================
+    // STATIC WALLPAPER - LOCK SCREEN
+    // =====================================================
+    
+    @PluginMethod
+    public void setImageAsLockScreen(PluginCall call) {
+        setWallpaperInternal(call, WallpaperManager.FLAG_LOCK);
+    }
+
+    // =====================================================
+    // STATIC WALLPAPER - BOTH SCREENS
+    // =====================================================
+    
+    @PluginMethod
+    public void setImageAsWallpaperAndLockScreen(PluginCall call) {
+        setWallpaperInternal(call, -1); // Both
+    }
+
+    // =====================================================
+    // INTERNAL WALLPAPER SETTER
+    // =====================================================
+    
+    private void setWallpaperInternal(PluginCall call, int flag) {
         String path = call.getString("path");
-        String target = call.getString("target", "home"); // home | lock | both
 
         if (path == null || path.isEmpty()) {
+            Log.e(TAG, "❌ Path is null or empty");
             call.reject("Path required");
             return;
         }
+
+        Log.d(TAG, "📂 Setting wallpaper from: " + path);
 
         new Thread(() -> {
             try {
                 File file = new File(path);
                 if (!file.exists()) {
-                    call.reject("File not found");
+                    Log.e(TAG, "❌ File not found: " + path);
+                    getActivity().runOnUiThread(() -> call.reject("File not found"));
                     return;
                 }
 
-                WallpaperManager wm =
-                        WallpaperManager.getInstance(getContext());
+                Log.d(TAG, "✅ File exists, size: " + file.length() + " bytes");
 
+                WallpaperManager wm = WallpaperManager.getInstance(getContext());
                 InputStream is = new FileInputStream(file);
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    switch (target) {
-                        case "lock":
-                            wm.setStream(is, null, true,
-                                    WallpaperManager.FLAG_LOCK);
-                            break;
-                        case "both":
-                            wm.setStream(is);
-                            break;
-                        case "home":
-                        default:
-                            wm.setStream(is, null, true,
-                                    WallpaperManager.FLAG_SYSTEM);
-                            break;
-                    }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && flag != -1) {
+                    // Android 7+ with specific flag
+                    wm.setStream(is, null, true, flag);
+                    Log.d(TAG, "✅ Wallpaper set with flag: " + flag);
                 } else {
+                    // Both screens or older Android
                     wm.setStream(is);
+                    Log.d(TAG, "✅ Wallpaper set (both screens)");
                 }
 
                 is.close();
 
                 JSObject res = new JSObject();
                 res.put("success", true);
-                call.resolve(res);
+                
+                getActivity().runOnUiThread(() -> call.resolve(res));
 
-                Log.d(TAG, "✅ Static wallpaper set");
+                Log.d(TAG, "✅ SUCCESS");
 
             } catch (Exception e) {
-                Log.e(TAG, "❌ Static wallpaper failed", e);
-                call.reject(e.getMessage());
+                Log.e(TAG, "❌ Error: " + e.getMessage(), e);
+                getActivity().runOnUiThread(() -> call.reject("Error: " + e.getMessage()));
             }
         }).start();
     }
 
     // =====================================================
-    // LIVE WALLPAPER (NO RESTART – KEEP YOUR LOGIC)
+    // LIVE WALLPAPER
     // =====================================================
-
+    
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
         String videoPath = call.getString("path");
@@ -103,6 +123,8 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
+        Log.d(TAG, "🎥 Setting live wallpaper: " + videoPath);
+
         // Save path for LiveWallpaperService
         getContext()
             .getSharedPreferences("LiveWallpaper", Context.MODE_PRIVATE)
@@ -111,15 +133,11 @@ public class WallpaperPlugin extends Plugin {
             .apply();
 
         try {
-            Intent intent =
-                new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
+            Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
 
             intent.putExtra(
                 WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                new ComponentName(
-                    getContext(),
-                    LiveWallpaperService.class
-                )
+                new ComponentName(getContext(), LiveWallpaperService.class)
             );
 
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -129,9 +147,10 @@ public class WallpaperPlugin extends Plugin {
             res.put("success", true);
             call.resolve(res);
 
-            Log.d(TAG, "🎥 Live wallpaper picker opened");
+            Log.d(TAG, "✅ Live wallpaper picker opened");
 
         } catch (Exception e) {
+            Log.e(TAG, "❌ Live wallpaper failed", e);
             call.reject(e.getMessage());
         }
     }
