@@ -5,6 +5,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -75,7 +77,10 @@ public class WallpaperPlugin extends Plugin {
                 File file = new File(path);
                 if (!file.exists()) {
                     Log.e(TAG, "❌ File not found: " + path);
-                    getActivity().runOnUiThread(() -> call.reject("File not found"));
+                    // Use Handler instead of getActivity()
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        call.reject("File not found");
+                    });
                     return;
                 }
 
@@ -99,13 +104,19 @@ public class WallpaperPlugin extends Plugin {
                 JSObject res = new JSObject();
                 res.put("success", true);
                 
-                getActivity().runOnUiThread(() -> call.resolve(res));
+                // Use Handler instead of getActivity()
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    call.resolve(res);
+                });
 
                 Log.d(TAG, "✅ SUCCESS");
 
             } catch (Exception e) {
                 Log.e(TAG, "❌ Error: " + e.getMessage(), e);
-                getActivity().runOnUiThread(() -> call.reject("Error: " + e.getMessage()));
+                // Use Handler instead of getActivity()
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    call.reject("Error: " + e.getMessage());
+                });
             }
         }).start();
     }
