@@ -5,7 +5,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -15,7 +14,6 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -43,28 +41,27 @@ public class WallpaperPlugin extends Plugin {
         call.resolve(res);
     }
 
-    // ============================================================
-    // ✅ STATIC WALLPAPER — GALLERY / FILES STYLE (NO RESTART)
-    // ============================================================
+    // =====================================================
+    // ✅ STATIC WALLPAPER — NATIVE GALLERY STYLE
+    // =====================================================
 
     @PluginMethod
     public void setImageAsWallpaper(PluginCall call) {
-        applyStaticWallpaper(call, WallpaperManager.FLAG_SYSTEM);
+        apply(call, WallpaperManager.FLAG_SYSTEM);
     }
 
     @PluginMethod
     public void setImageAsLockScreen(PluginCall call) {
-        applyStaticWallpaper(call, WallpaperManager.FLAG_LOCK);
+        apply(call, WallpaperManager.FLAG_LOCK);
     }
 
     @PluginMethod
     public void setImageAsWallpaperAndLockScreen(PluginCall call) {
-        applyStaticWallpaper(call, -1); // both
+        apply(call, -1); // both
     }
 
-    private void applyStaticWallpaper(PluginCall call, int flag) {
+    private void apply(PluginCall call, int flag) {
         String url = call.getString("url");
-
         if (url == null || url.isEmpty()) {
             call.reject("URL required");
             return;
@@ -76,38 +73,31 @@ public class WallpaperPlugin extends Plugin {
         try {
             File imageFile = future.get();
             if (imageFile == null || !imageFile.exists()) {
-                call.reject("Download failed");
-                executor.shutdown();
+                call.reject("Image download failed");
                 return;
             }
 
-            WallpaperManager wm = WallpaperManager.getInstance(getContext());
-            InputStream is = new FileInputStream(imageFile);
+            Intent intent = new Intent(getContext(), WallpaperApplyActivity.class);
+            intent.putExtra("path", imageFile.getAbsolutePath());
+            intent.putExtra("flag", flag);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && flag != -1) {
-                wm.setStream(is, null, false, flag);
-            } else {
-                wm.setStream(is);
-            }
-
-            is.close();
+            getContext().startActivity(intent);
 
             JSObject res = new JSObject();
-            res.put("success", true);
+            res.put("started", true);
             call.resolve(res);
 
-            Log.d(TAG, "✅ Wallpaper applied using setStream() — NO restart");
-
-        } catch (Exception e) {
+        } catch (InterruptedException | ExecutionException e) {
             call.reject(e.getMessage());
         } finally {
             executor.shutdown();
         }
     }
 
-    // ============================================================
-    // 📥 DOWNLOAD IMAGE → CACHE (LIKE GALLERY)
-    // ============================================================
+    // =====================================================
+    // 📥 IMAGE DOWNLOAD → CACHE (LIKE GALLERY)
+    // =====================================================
 
     private class DownloadToCacheTask implements Callable<File> {
         private final String imageUrl;
@@ -150,9 +140,9 @@ public class WallpaperPlugin extends Plugin {
         }
     }
 
-    // ============================================================
-    // 🎥 LIVE WALLPAPER — KEEP AS YOU HAD (UNCHANGED)
-    // ============================================================
+    // =====================================================
+    // 🎥 LIVE WALLPAPER — UNCHANGED (SAFE)
+    // =====================================================
 
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
@@ -172,7 +162,7 @@ public class WallpaperPlugin extends Plugin {
                     .putString("live_wallpaper_type", type)
                     .apply();
 
-            openNativeLiveWallpaperPicker(call);
+            openLivePicker(call);
             return;
         }
 
@@ -181,18 +171,18 @@ public class WallpaperPlugin extends Plugin {
 
         try {
             if (future.get()) {
-                openNativeLiveWallpaperPicker(call);
+                openLivePicker(call);
             } else {
                 call.reject("Video download failed");
             }
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (Exception e) {
             call.reject(e.getMessage());
         } finally {
             executor.shutdown();
         }
     }
 
-    private void openNativeLiveWallpaperPicker(PluginCall call) {
+    private void openLivePicker(PluginCall call) {
         try {
             Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
             intent.putExtra(
@@ -200,7 +190,6 @@ public class WallpaperPlugin extends Plugin {
                     new ComponentName(getContext(), LiveWallpaperService.class)
             );
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
             getContext().startActivity(intent);
 
             JSObject res = new JSObject();
