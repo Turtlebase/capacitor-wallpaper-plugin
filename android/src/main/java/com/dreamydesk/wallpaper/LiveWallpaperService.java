@@ -1,4 +1,4 @@
-package com.dreamydesk.app;
+package com.dreamydesk.wallpaper;
 
 import android.content.Context;
 import android.content.SharedPreferences;
