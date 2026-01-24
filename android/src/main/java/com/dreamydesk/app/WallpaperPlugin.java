@@ -5,6 +5,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -14,6 +15,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -31,7 +33,7 @@ public class WallpaperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        Log.d(TAG, "✅ WallpaperPlugin loaded (Gallery-style)");
+        Log.d(TAG, "✅ WallpaperPlugin loaded (Gallery-style, SAFE)");
     }
 
     @PluginMethod
@@ -41,108 +43,73 @@ public class WallpaperPlugin extends Plugin {
         call.resolve(res);
     }
 
-    // =====================================================
-    // ✅ STATIC WALLPAPER — NATIVE GALLERY STYLE
-    // =====================================================
+    // =========================================================
+    // ✅ STATIC WALLPAPER — FILE PATH ONLY (NO RESTART)
+    // =========================================================
 
     @PluginMethod
     public void setImageAsWallpaper(PluginCall call) {
-        apply(call, WallpaperManager.FLAG_SYSTEM);
+        applyStatic(call, "home");
     }
 
     @PluginMethod
     public void setImageAsLockScreen(PluginCall call) {
-        apply(call, WallpaperManager.FLAG_LOCK);
+        applyStatic(call, "lock");
     }
 
     @PluginMethod
     public void setImageAsWallpaperAndLockScreen(PluginCall call) {
-        apply(call, -1); // both
+        applyStatic(call, "both");
     }
 
-    private void apply(PluginCall call, int flag) {
-        String url = call.getString("url");
-        if (url == null || url.isEmpty()) {
-            call.reject("URL required");
+    private void applyStatic(PluginCall call, String target) {
+        String path = call.getString("path");
+
+        if (path == null || path.isEmpty()) {
+            call.reject("Local file path required");
             return;
         }
 
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        Future<File> future = executor.submit(new DownloadToCacheTask(url));
-
         try {
-            File imageFile = future.get();
-            if (imageFile == null || !imageFile.exists()) {
-                call.reject("Image download failed");
+            File imageFile = new File(path);
+            if (!imageFile.exists()) {
+                call.reject("File does not exist");
                 return;
             }
 
-            Intent intent = new Intent(getContext(), WallpaperApplyActivity.class);
-            intent.putExtra("path", imageFile.getAbsolutePath());
-            intent.putExtra("flag", flag);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            WallpaperManager wm = WallpaperManager.getInstance(getContext());
+            InputStream is = new FileInputStream(imageFile);
 
-            getContext().startActivity(intent);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                if ("home".equals(target)) {
+                    wm.setStream(is, null, false, WallpaperManager.FLAG_SYSTEM);
+                } else if ("lock".equals(target)) {
+                    wm.setStream(is, null, false, WallpaperManager.FLAG_LOCK);
+                } else {
+                    wm.setStream(is, null, false, WallpaperManager.FLAG_SYSTEM);
+                    wm.setStream(is, null, false, WallpaperManager.FLAG_LOCK);
+                }
+            } else {
+                wm.setStream(is);
+            }
+
+            is.close();
 
             JSObject res = new JSObject();
-            res.put("started", true);
+            res.put("success", true);
             call.resolve(res);
 
-        } catch (InterruptedException | ExecutionException e) {
+            Log.d(TAG, "✅ Static wallpaper set (NO restart)");
+
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Static wallpaper failed", e);
             call.reject(e.getMessage());
-        } finally {
-            executor.shutdown();
         }
     }
 
-    // =====================================================
-    // 📥 IMAGE DOWNLOAD → CACHE (LIKE GALLERY)
-    // =====================================================
-
-    private class DownloadToCacheTask implements Callable<File> {
-        private final String imageUrl;
-
-        DownloadToCacheTask(String imageUrl) {
-            this.imageUrl = imageUrl;
-        }
-
-        @Override
-        public File call() {
-            try {
-                URL url = new URL(imageUrl);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.connect();
-
-                File outFile = new File(
-                        getContext().getCacheDir(),
-                        "wallpaper_temp.jpg"
-                );
-
-                InputStream in = conn.getInputStream();
-                java.io.FileOutputStream out = new java.io.FileOutputStream(outFile);
-
-                byte[] buf = new byte[8192];
-                int len;
-                while ((len = in.read(buf)) > 0) {
-                    out.write(buf, 0, len);
-                }
-
-                in.close();
-                out.close();
-                conn.disconnect();
-
-                return outFile;
-
-            } catch (Exception e) {
-                Log.e(TAG, "❌ Image download failed", e);
-                return null;
-            }
-        }
-    }
-
-    // =====================================================
-    // 🎥 LIVE WALLPAPER — UNCHANGED (SAFE)
-    // =====================================================
+    // =========================================================
+    // 🎥 LIVE WALLPAPER — PRESERVED EXACTLY
+    // =========================================================
 
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
@@ -154,35 +121,32 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
+        // Already downloaded
         if (videoUrl.startsWith("file://")) {
             File videoFile = new File(Uri.parse(videoUrl).getPath());
-            getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putString("live_wallpaper_path", videoFile.getAbsolutePath())
-                    .putString("live_wallpaper_type", type)
-                    .apply();
-
-            openLivePicker(call);
+            saveLiveWallpaperPrefs(videoFile.getAbsolutePath(), type);
+            openLiveWallpaperPicker(call);
             return;
         }
 
+        // Download to cache (same as before)
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<Boolean> future = executor.submit(new DownloadVideoCallable(videoUrl, type));
 
         try {
             if (future.get()) {
-                openLivePicker(call);
+                openLiveWallpaperPicker(call);
             } else {
                 call.reject("Video download failed");
             }
-        } catch (Exception e) {
+        } catch (InterruptedException | ExecutionException e) {
             call.reject(e.getMessage());
         } finally {
             executor.shutdown();
         }
     }
 
-    private void openLivePicker(PluginCall call) {
+    private void openLiveWallpaperPicker(PluginCall call) {
         try {
             Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
             intent.putExtra(
@@ -190,14 +154,25 @@ public class WallpaperPlugin extends Plugin {
                     new ComponentName(getContext(), LiveWallpaperService.class)
             );
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
             getContext().startActivity(intent);
 
             JSObject res = new JSObject();
             res.put("success", true);
             call.resolve(res);
+
         } catch (Exception e) {
             call.reject(e.getMessage());
         }
+    }
+
+    private void saveLiveWallpaperPrefs(String path, String type) {
+        getContext()
+                .getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .putString("live_wallpaper_path", path)
+                .putString("live_wallpaper_type", type)
+                .apply();
     }
 
     private class DownloadVideoCallable implements Callable<Boolean> {
@@ -230,14 +205,11 @@ public class WallpaperPlugin extends Plugin {
                 out.close();
                 conn.disconnect();
 
-                getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
-                        .edit()
-                        .putString("live_wallpaper_path", file.getAbsolutePath())
-                        .putString("live_wallpaper_type", type)
-                        .apply();
-
+                saveLiveWallpaperPrefs(file.getAbsolutePath(), type);
                 return true;
+
             } catch (Exception e) {
+                Log.e(TAG, "❌ Live wallpaper download failed", e);
                 return false;
             }
         }
