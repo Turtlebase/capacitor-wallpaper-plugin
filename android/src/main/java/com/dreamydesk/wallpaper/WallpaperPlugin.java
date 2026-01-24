@@ -33,7 +33,7 @@ public class WallpaperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        Log.d(TAG, "✅ WallpaperPlugin loaded (Gallery-style static + original live)");
+        Log.d(TAG, "✅ WallpaperPlugin loaded (backward compatible)");
     }
 
     @PluginMethod
@@ -44,36 +44,42 @@ public class WallpaperPlugin extends Plugin {
     }
 
     // =====================================================
-    // ✅ STATIC WALLPAPER — GALLERY STYLE (NO RESTART)
+    // ✅ STATIC WALLPAPER (PATH + URL SAFE)
     // =====================================================
 
     @PluginMethod
     public void setImageAsWallpaper(PluginCall call) {
-        applyFromPath(call, WallpaperManager.FLAG_SYSTEM);
+        applyStatic(call, WallpaperManager.FLAG_SYSTEM);
     }
 
     @PluginMethod
     public void setImageAsLockScreen(PluginCall call) {
-        applyFromPath(call, WallpaperManager.FLAG_LOCK);
+        applyStatic(call, WallpaperManager.FLAG_LOCK);
     }
 
     @PluginMethod
     public void setImageAsWallpaperAndLockScreen(PluginCall call) {
-        applyFromPath(call, -1); // both
+        applyStatic(call, -1); // both
     }
 
-    private void applyFromPath(PluginCall call, int flag) {
+    private void applyStatic(PluginCall call, int flag) {
+
+        // 🔥 CRITICAL FIX: accept BOTH path and url
         String path = call.getString("path");
+        if (path == null || path.isEmpty()) {
+            path = call.getString("url");
+        }
 
         if (path == null || path.isEmpty()) {
-            call.reject("Path required");
+            Log.e(TAG, "❌ No path or url provided");
+            call.reject("Path or URL required");
             return;
         }
 
         try {
             File imageFile = new File(path);
             if (!imageFile.exists()) {
-                call.reject("File not found");
+                call.reject("File not found: " + path);
                 return;
             }
 
@@ -92,44 +98,43 @@ public class WallpaperPlugin extends Plugin {
             res.put("success", true);
             call.resolve(res);
 
-            Log.d(TAG, "✅ Static wallpaper applied via setStream()");
+            Log.d(TAG, "✅ Static wallpaper applied");
 
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to apply wallpaper", e);
+            Log.e(TAG, "❌ Static wallpaper failed", e);
             call.reject(e.getMessage());
         }
     }
 
     // =====================================================
-    // 🎥 LIVE WALLPAPER — ORIGINAL LOGIC (UNCHANGED)
+    // 🎥 LIVE WALLPAPER (UNCHANGED LOGIC, BUT SAFE INPUT)
     // =====================================================
 
     @PluginMethod
     public void setLiveWallpaper(PluginCall call) {
-        Log.d(TAG, "📱 setLiveWallpaper called");
 
-        String videoUrl = call.getString("url");
+        // 🔥 accept BOTH path and url
+        String videoPath = call.getString("path");
+        String videoUrl  = call.getString("url");
         String type = call.getString("type", "gif");
 
-        if (videoUrl == null || videoUrl.isEmpty()) {
-            call.reject("Must provide video URL");
-            return;
+        File videoFile = null;
+
+        if (videoPath != null && !videoPath.isEmpty()) {
+            videoFile = new File(videoPath);
         }
 
-        // Local file already available
-        if (videoUrl.startsWith("file://")) {
-            File videoFile = new File(Uri.parse(videoUrl).getPath());
-            getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putString("live_wallpaper_path", videoFile.getAbsolutePath())
-                    .putString("live_wallpaper_type", type)
-                    .apply();
-
+        if (videoFile != null && videoFile.exists()) {
+            saveLivePrefs(videoFile.getAbsolutePath(), type);
             openLivePicker(call);
             return;
         }
 
-        // Download video in background (AS YOU HAD)
+        if (videoUrl == null || videoUrl.isEmpty()) {
+            call.reject("Path or URL required");
+            return;
+        }
+
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<Boolean> future = executor.submit(new DownloadVideoCallable(videoUrl, type));
 
@@ -139,11 +144,19 @@ public class WallpaperPlugin extends Plugin {
             } else {
                 call.reject("Video download failed");
             }
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (Exception e) {
             call.reject(e.getMessage());
         } finally {
             executor.shutdown();
         }
+    }
+
+    private void saveLivePrefs(String path, String type) {
+        getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .putString("live_wallpaper_path", path)
+                .putString("live_wallpaper_type", type)
+                .apply();
     }
 
     private void openLivePicker(PluginCall call) {
@@ -154,7 +167,6 @@ public class WallpaperPlugin extends Plugin {
                     new ComponentName(getContext(), LiveWallpaperService.class)
             );
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
             getContext().startActivity(intent);
 
             JSObject res = new JSObject();
@@ -196,12 +208,7 @@ public class WallpaperPlugin extends Plugin {
                 out.close();
                 conn.disconnect();
 
-                getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
-                        .edit()
-                        .putString("live_wallpaper_path", file.getAbsolutePath())
-                        .putString("live_wallpaper_type", type)
-                        .apply();
-
+                saveLivePrefs(file.getAbsolutePath(), type);
                 return true;
 
             } catch (Exception e) {
