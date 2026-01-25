@@ -1,27 +1,28 @@
 export interface WallpaperPlugin {
   /**
-   * ----------------------------------------
-   * STATIC WALLPAPERS
-   * ----------------------------------------
-   * Sets image as wallpaper using system Intent chooser
-   * - NO VISIBLE RESTART (app stays alive)
-   * - Automatic fallback to direct method if Intent fails
-   * - path: Local file path (NOT URL)
-   * - Example: /data/data/com.app/cache/wallpapers/image.jpg
+   * Set image as home screen wallpaper
+   * Uses Intent chooser (NO VISIBLE RESTART)
    */
-
   setImageAsWallpaper(options: {
     path: string;
   }): Promise<{
     success: boolean;
   }>;
 
+  /**
+   * Set image as lock screen wallpaper
+   * Uses Intent chooser (NO VISIBLE RESTART)
+   */
   setImageAsLockScreen(options: {
     path: string;
   }): Promise<{
     success: boolean;
   }>;
 
+  /**
+   * Set image as both home and lock screen wallpaper
+   * Uses Intent chooser (NO VISIBLE RESTART)
+   */
   setImageAsWallpaperAndLockScreen(options: {
     path: string;
   }): Promise<{
@@ -29,15 +30,8 @@ export interface WallpaperPlugin {
   }>;
 
   /**
-   * ----------------------------------------
-   * LIVE WALLPAPER (VIDEO)
-   * ----------------------------------------
-   * Sets video as live wallpaper
-   * - Opens system live wallpaper picker
-   * - path: Local video file path
-   * - Supports MP4, GIF
+   * Set video as live wallpaper
    */
-
   setLiveWallpaper(options: {
     path: string;
   }): Promise<{
@@ -45,12 +39,8 @@ export interface WallpaperPlugin {
   }>;
 
   /**
-   * ----------------------------------------
-   * AVAILABILITY CHECK
-   * ----------------------------------------
-   * Check if wallpaper plugin is available
+   * Check if plugin is available
    */
-
   isAvailable(): Promise<{
     available: boolean;
   }>;
