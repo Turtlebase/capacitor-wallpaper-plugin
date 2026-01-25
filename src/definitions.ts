@@ -1,44 +1,45 @@
-export interface WallpaperPluginPlugin {
+export interface WallpaperPlugin {
   /**
    * ----------------------------------------
-   * STATIC WALLPAPERS (Gallery-style)
+   * STATIC WALLPAPERS
    * ----------------------------------------
-   * IMPORTANT:
-   * - `path` = local file path
-   * - Example: /data/data/com.app/cache/wallpapers/wallpaper_123.jpg
-   * - Plugin NEVER downloads images
+   * Sets image as wallpaper using system Intent chooser
+   * - NO VISIBLE RESTART (app stays alive)
+   * - Automatic fallback to direct method if Intent fails
+   * - path: Local file path (NOT URL)
+   * - Example: /data/data/com.app/cache/wallpapers/image.jpg
    */
 
   setImageAsWallpaper(options: {
-    path: string;        // local file path
+    path: string;
   }): Promise<{
     success: boolean;
   }>;
 
   setImageAsLockScreen(options: {
-    path: string;        // local file path
+    path: string;
   }): Promise<{
     success: boolean;
   }>;
 
   setImageAsWallpaperAndLockScreen(options: {
-    path: string;        // local file path
+    path: string;
   }): Promise<{
     success: boolean;
   }>;
 
   /**
    * ----------------------------------------
-   * LIVE WALLPAPER
+   * LIVE WALLPAPER (VIDEO)
    * ----------------------------------------
-   * - Supports GIF / MP4
-   * - Path OR URL allowed (plugin may cache internally)
+   * Sets video as live wallpaper
+   * - Opens system live wallpaper picker
+   * - path: Local video file path
+   * - Supports MP4, GIF
    */
 
   setLiveWallpaper(options: {
-    path?: string;       // preferred (local file)
-    url?: string;        // optional fallback
-    type?: 'gif' | 'mp4';
+    path: string;
   }): Promise<{
     success: boolean;
   }>;
@@ -47,6 +48,7 @@ export interface WallpaperPluginPlugin {
    * ----------------------------------------
    * AVAILABILITY CHECK
    * ----------------------------------------
+   * Check if wallpaper plugin is available
    */
 
   isAvailable(): Promise<{
