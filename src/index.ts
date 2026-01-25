@@ -1,10 +1,9 @@
 import { registerPlugin } from '@capacitor/core';
+import type { WallpaperPlugin } from './definitions';
 
-import type { WallpaperPluginPlugin } from './definitions';
-
-const WallpaperPlugin = registerPlugin<WallpaperPluginPlugin>('WallpaperPlugin', {
-  web: () => import('./web').then((m) => new m.WallpaperPluginWeb()),
+const Wallpaper = registerPlugin<WallpaperPlugin>('WallpaperPlugin', {
+  web: () => import('./web').then(m => new m.WallpaperWeb()),
 });
 
 export * from './definitions';
-export { WallpaperPlugin };
+export { Wallpaper };
