@@ -1,8 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
+import type { WallpaperPlugin } from './definitions';
 
-import type { WallpaperPluginPlugin } from './definitions';
-
-export class WallpaperPluginWeb extends WebPlugin implements WallpaperPluginPlugin {
+export class WallpaperWeb extends WebPlugin implements WallpaperPlugin {
   async setImageAsWallpaper(): Promise<{ success: boolean }> {
     throw this.unimplemented('Not implemented on web.');
   }
