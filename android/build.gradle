@@ -1,16 +1,28 @@
 apply plugin: 'com.android.library'
 
 android {
-    namespace "com.dreamydesk.app"
+    namespace "com.dreamydesk.wallpaper"
     compileSdkVersion 35
 
     defaultConfig {
         minSdkVersion 23
-        targetSdkVersion 34
+        targetSdkVersion 35
+    }
+
+    // ✅ ADD THIS: Java 17 configuration
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 }
 
 dependencies {
     implementation project(':capacitor-android')
+    
+    // ✅ ADD THESE: Required for FileProvider
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core:1.12.0'
+    
+    // For video wallpapers (keep this)
     implementation "androidx.media3:media3-exoplayer:1.2.1"
 }
