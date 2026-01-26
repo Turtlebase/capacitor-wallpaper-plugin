@@ -1,29 +1,52 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- ============================= -->
+    <!-- REQUIRED PERMISSIONS -->
+    <!-- ============================= -->
+
+    <!-- Needed for downloading wallpapers -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Needed for static wallpapers -->
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
-    <uses-permission android:name="android.permission.BIND_WALLPAPER"
+
+    <!-- Required for live wallpaper service -->
+    <uses-permission
+        android:name="android.permission.BIND_WALLPAPER"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Declare live wallpaper feature (optional) -->
     <uses-feature
         android:name="android.software.live_wallpaper"
         android:required="false" />
 
+    <!-- ============================= -->
+    <!-- APPLICATION (PLUGIN SCOPE) -->
+    <!-- ============================= -->
+
     <application>
+
+        <!-- ============================= -->
+        <!-- LIVE WALLPAPER SERVICE -->
+        <!-- ============================= -->
+
         <service
             android:name=".LiveWallpaperService"
             android:enabled="true"
             android:exported="true"
             android:label="@string/wallpaper_service_name"
             android:permission="android.permission.BIND_WALLPAPER">
+
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
+
             <meta-data
                 android:name="android.service.wallpaper"
                 android:resource="@xml/live_wallpaper" />
         </service>
+
     </application>
 
 </manifest>
