@@ -35,7 +35,7 @@ import java.util.concurrent.Future;
  * Static wallpapers: Set directly by the app (no restart, instant like Zedge)
  * Live wallpapers: Download video/GIF, then open native Android picker for user selection
  * 
- * @version 1.1.0 - Fixed app restart issue
+ * @version 1.3.0 - Two-pass inSampleSize decode, background thread apply, screen resize, main-thread callbacks
  */
 @CapacitorPlugin(name = "WallpaperPlugin")
 public class WallpaperPlugin extends Plugin {
@@ -43,6 +43,8 @@ public class WallpaperPlugin extends Plugin {
     private static final String TAG = "WallpaperPlugin";
     private Context context = null;
     private static final boolean IS_NOUGAT_OR_GREATER = Build.VERSION.SDK_INT >= 24;
+    // ✅ PATCH 1: Global single-thread executor — avoids spawning many threads
+    private static final ExecutorService wallpaperExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     public void load() {
@@ -76,6 +78,12 @@ public class WallpaperPlugin extends Plugin {
 
         try {
             bmp = future.get();
+
+            // ✅ PATCH 3: Resize bitmap to screen dimensions before setting
+            if (bmp != null) {
+                bmp = resizeBitmapToScreen(bmp);
+            }
+
             if (bmp == null) {
                 call.reject("Failed to download image");
                 executorService.shutdown();
@@ -88,7 +96,8 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
-        getBridge().executeOnMainThread(new SetBackgroundImageRunnable(bmp, call));
+        // ✅ PATCH 4: Apply wallpaper on background thread, not UI thread
+        wallpaperExecutor.execute(new SetBackgroundImageRunnable(bmp, call));
         executorService.shutdown();
     }
 
@@ -111,6 +120,12 @@ public class WallpaperPlugin extends Plugin {
 
         try {
             bmp = future.get();
+
+            // ✅ PATCH 3: Resize bitmap to screen dimensions before setting
+            if (bmp != null) {
+                bmp = resizeBitmapToScreen(bmp);
+            }
+
             if (bmp == null) {
                 call.reject("Failed to download image");
                 executorService.shutdown();
@@ -123,7 +138,8 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
-        getBridge().executeOnMainThread(new SetLockScreenImageRunnable(bmp, call));
+        // ✅ PATCH 4: Apply wallpaper on background thread, not UI thread
+        wallpaperExecutor.execute(new SetLockScreenImageRunnable(bmp, call));
         executorService.shutdown();
     }
 
@@ -146,6 +162,12 @@ public class WallpaperPlugin extends Plugin {
 
         try {
             bmp = future.get();
+
+            // ✅ PATCH 3: Resize bitmap to screen dimensions before setting
+            if (bmp != null) {
+                bmp = resizeBitmapToScreen(bmp);
+            }
+
             if (bmp == null) {
                 call.reject("Failed to download image");
                 executorService.shutdown();
@@ -158,7 +180,8 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
-        getBridge().executeOnMainThread(new SetLockScreenAndWallpaperImageRunnable(bmp, call));
+        // ✅ PATCH 4: Apply wallpaper on background thread, not UI thread
+        wallpaperExecutor.execute(new SetLockScreenAndWallpaperImageRunnable(bmp, call));
         executorService.shutdown();
     }
 
@@ -270,6 +293,49 @@ public class WallpaperPlugin extends Plugin {
         }
     }
 
+    // ================== HELPER METHODS ==================
+
+    /**
+     * ✅ PATCH 2: Resize bitmap to match screen resolution.
+     * Reduces memory usage and speeds up WallpaperManager.setBitmap() significantly.
+     * A 4K image resized to 1080p applies ~4x faster.
+     */
+    private Bitmap resizeBitmapToScreen(Bitmap bmp) {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        int width = metrics.widthPixels;
+        int height = metrics.heightPixels;
+        Log.d(TAG, "📐 Resizing bitmap to screen: " + width + "x" + height);
+        return Bitmap.createScaledBitmap(bmp, width, height, true);
+    }
+
+    /**
+     * ✅ PATCH 6: Calculate the largest inSampleSize that keeps the decoded bitmap
+     * at or above the required screen dimensions.
+     * Powers the two-pass decode in GetBitmapFromURLCallable to avoid loading
+     * full 4K/8K images into RAM on low-memory devices (same technique as Zedge/Wallcraft).
+     */
+    private int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        int height = options.outHeight;
+        int width  = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height > reqHeight || width > reqWidth) {
+            int halfHeight = height / 2;
+            int halfWidth  = width  / 2;
+
+            // Keep halving until the result would be smaller than the screen
+            while ((halfHeight / inSampleSize) >= reqHeight
+                    && (halfWidth  / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+
+        Log.d(TAG, "📐 inSampleSize calculated: " + inSampleSize +
+              " (source " + width + "x" + height +
+              " → target " + reqWidth + "x" + reqHeight + ")");
+        return inSampleSize;
+    }
+
     // ================== INNER CLASSES ==================
 
     /**
@@ -287,30 +353,57 @@ public class WallpaperPlugin extends Plugin {
             Bitmap bmp = null;
             HttpURLConnection connection = null;
             InputStream inputStream = null;
-            
+
             try {
+                DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+                int reqWidth  = metrics.widthPixels;
+                int reqHeight = metrics.heightPixels;
+
+                // ✅ PATCH 6 — Pass 1: decode bounds only (zero pixels loaded into RAM)
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+
                 URL imageUrl = new URL(this.URL);
                 connection = (HttpURLConnection) imageUrl.openConnection();
                 connection.setDoInput(true);
                 connection.setConnectTimeout(30000);
                 connection.setReadTimeout(30000);
                 connection.connect();
-                
+
                 if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
                     inputStream = connection.getInputStream();
-                    
-                    // Optimize bitmap loading
-                    BitmapFactory.Options options = new BitmapFactory.Options();
-                    options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-                    options.inJustDecodeBounds = false;
-                    
+                    BitmapFactory.decodeStream(inputStream, null, options);
+                }
+
+                // Close first connection — bounds are now known
+                try { if (inputStream != null) inputStream.close(); } catch (IOException ignored) {}
+                try { if (connection  != null) connection.disconnect(); } catch (Exception ignored) {}
+                inputStream = null;
+                connection  = null;
+
+                // ✅ PATCH 6 — Pass 2: decode at reduced sample size (much less RAM)
+                options.inSampleSize       = calculateInSampleSize(options, reqWidth, reqHeight);
+                options.inJustDecodeBounds = false;
+                options.inPreferredConfig  = Bitmap.Config.ARGB_8888;
+
+                URL imageUrl2 = new URL(this.URL);
+                connection = (HttpURLConnection) imageUrl2.openConnection();
+                connection.setDoInput(true);
+                connection.setConnectTimeout(30000);
+                connection.setReadTimeout(30000);
+                connection.connect();
+
+                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    inputStream = connection.getInputStream();
                     bmp = BitmapFactory.decodeStream(inputStream, null, options);
-                    
+
                     if (bmp != null) {
-                        Log.d(TAG, "✅ Bitmap loaded: " + bmp.getWidth() + "x" + bmp.getHeight() + 
-                              " (" + (bmp.getByteCount() / 1024 / 1024) + "MB)");
+                        Log.d(TAG, "✅ Bitmap loaded (sampled): " + bmp.getWidth() + "x" + bmp.getHeight() +
+                              " (" + (bmp.getByteCount() / 1024 / 1024) + "MB)" +
+                              " inSampleSize=" + options.inSampleSize);
                     }
                 }
+
             } catch (IOException e) {
                 Log.e(TAG, "❌ Download error: " + e.getMessage());
                 e.printStackTrace();
@@ -320,12 +413,12 @@ public class WallpaperPlugin extends Plugin {
             } finally {
                 try {
                     if (inputStream != null) inputStream.close();
-                    if (connection != null) connection.disconnect();
+                    if (connection  != null) connection.disconnect();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
             }
-            
+
             return bmp;
         }
     }
@@ -433,8 +526,6 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
-                    // ✅ FIXED: Changed allowReturn from true to false
-                    // This prevents the system crop UI from opening and causing app restart
                     wallpaperManager.setBitmap(
                         bmp,
                         null,
@@ -452,15 +543,17 @@ public class WallpaperPlugin extends Plugin {
                 
                 JSObject result = new JSObject();
                 result.put("success", true);
-                callbackContext.resolve(result);
+                // ✅ PATCH 5: Resolve on main thread to safely update UI (spinner/toast)
+                getBridge().executeOnMainThread(() -> callbackContext.resolve(result));
                 
                 Log.d(TAG, "✅ Wallpaper set successfully (home screen) - No restart!");
                 
             } catch (IOException e) {
-                callbackContext.reject(e.getMessage());
+                // ✅ PATCH 5: Reject on main thread
+                getBridge().executeOnMainThread(() -> callbackContext.reject(e.getMessage()));
                 e.printStackTrace();
             } catch (OutOfMemoryError e) {
-                callbackContext.reject("Out of memory: " + e.getMessage());
+                getBridge().executeOnMainThread(() -> callbackContext.reject("Out of memory: " + e.getMessage()));
                 e.printStackTrace();
             }
         }
@@ -484,7 +577,6 @@ public class WallpaperPlugin extends Plugin {
             WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
             try {
                 if (IS_NOUGAT_OR_GREATER) {
-                    // ✅ FIXED: Changed allowReturn from true to false
                     wallpaperManager.setBitmap(
                         bmp,
                         null,
@@ -502,15 +594,17 @@ public class WallpaperPlugin extends Plugin {
                 
                 JSObject result = new JSObject();
                 result.put("success", true);
-                callbackContext.resolve(result);
+                // ✅ PATCH 5: Resolve on main thread to safely update UI (spinner/toast)
+                getBridge().executeOnMainThread(() -> callbackContext.resolve(result));
                 
                 Log.d(TAG, "✅ Wallpaper set successfully (lock screen) - No restart!");
                 
             } catch (IOException e) {
-                callbackContext.reject(e.getMessage());
+                // ✅ PATCH 5: Reject on main thread
+                getBridge().executeOnMainThread(() -> callbackContext.reject(e.getMessage()));
                 e.printStackTrace();
             } catch (OutOfMemoryError e) {
-                callbackContext.reject("Out of memory: " + e.getMessage());
+                getBridge().executeOnMainThread(() -> callbackContext.reject("Out of memory: " + e.getMessage()));
                 e.printStackTrace();
             }
         }
@@ -538,10 +632,9 @@ public class WallpaperPlugin extends Plugin {
                 
                 // Then set for lock screen (Android 7.0+)
                 if (IS_NOUGAT_OR_GREATER) {
-                    // ✅ FIXED: Changed allowReturn from true to false
                     wallpaperManager.setBitmap(bmp, null, false, WallpaperManager.FLAG_LOCK);
                 }
-                
+
                 // ✅ Clean up bitmap
                 if (bmp != null && !bmp.isRecycled()) {
                     bmp.recycle();
@@ -549,15 +642,17 @@ public class WallpaperPlugin extends Plugin {
                 
                 JSObject result = new JSObject();
                 result.put("success", true);
-                callbackContext.resolve(result);
+                // ✅ PATCH 5: Resolve on main thread to safely update UI (spinner/toast)
+                getBridge().executeOnMainThread(() -> callbackContext.resolve(result));
                 
                 Log.d(TAG, "✅ Wallpaper set successfully (both screens) - No restart!");
                 
             } catch (IOException e) {
-                callbackContext.reject(e.getMessage());
+                // ✅ PATCH 5: Reject on main thread
+                getBridge().executeOnMainThread(() -> callbackContext.reject(e.getMessage()));
                 e.printStackTrace();
             } catch (OutOfMemoryError e) {
-                callbackContext.reject("Out of memory: " + e.getMessage());
+                getBridge().executeOnMainThread(() -> callbackContext.reject("Out of memory: " + e.getMessage()));
                 e.printStackTrace();
             }
         }
