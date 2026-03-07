@@ -35,7 +35,7 @@ import java.util.concurrent.Future;
  * Static wallpapers: Set directly by the app (no restart, instant like Zedge)
  * Live wallpapers: Download video/GIF, then open native Android picker for user selection
  * 
- * @version 1.3.0 - Two-pass inSampleSize decode, background thread apply, screen resize, main-thread callbacks
+ * @version 1.4.0 - Cover+centre-crop for tablets, two-pass inSampleSize decode, background thread apply, main-thread callbacks
  */
 @CapacitorPlugin(name = "WallpaperPlugin")
 public class WallpaperPlugin extends Plugin {
@@ -296,16 +296,57 @@ public class WallpaperPlugin extends Plugin {
     // ================== HELPER METHODS ==================
 
     /**
-     * ✅ PATCH 2: Resize bitmap to match screen resolution.
-     * Reduces memory usage and speeds up WallpaperManager.setBitmap() significantly.
-     * A 4K image resized to 1080p applies ~4x faster.
+     * ✅ PATCH 2 (v1.4.0 — cover + centre-crop):
+     *
+     * Old approach: createScaledBitmap(w, h) → stretches the image to fill the screen exactly.
+     * That distorts aspect ratio and looks terrible on tablets (wide screen, portrait image).
+     *
+     * New approach — equivalent to CSS "background-size: cover; background-position: center":
+     *   1. Scale the image UP or DOWN uniformly so it fully COVERS the screen
+     *      (the smaller dimension matches the screen; the larger overflows).
+     *   2. Crop the overflow symmetrically from the centre.
+     *
+     * Result: image always fills the screen, never stretches, subject stays centred.
+     * Works correctly on phones, tablets (landscape & portrait), and foldables.
      */
     private Bitmap resizeBitmapToScreen(Bitmap bmp) {
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
-        int width = metrics.widthPixels;
-        int height = metrics.heightPixels;
-        Log.d(TAG, "📐 Resizing bitmap to screen: " + width + "x" + height);
-        return Bitmap.createScaledBitmap(bmp, width, height, true);
+        int screenW = metrics.widthPixels;
+        int screenH = metrics.heightPixels;
+
+        int srcW = bmp.getWidth();
+        int srcH = bmp.getHeight();
+
+        // Scale factor that makes the image COVER the screen (larger of the two ratios)
+        float scaleX = (float) screenW / srcW;
+        float scaleY = (float) screenH / srcH;
+        float scale  = Math.max(scaleX, scaleY);   // cover = max, contain = min
+
+        // Scaled dimensions — one axis matches screen exactly, the other overflows
+        int scaledW = Math.round(srcW * scale);
+        int scaledH = Math.round(srcH * scale);
+
+        // Scale the full bitmap first
+        Bitmap scaled = Bitmap.createScaledBitmap(bmp, scaledW, scaledH, true);
+
+        // Crop the overflow symmetrically (centre-crop)
+        int cropX = (scaledW - screenW) / 2;
+        int cropY = (scaledH - screenH) / 2;
+
+        Bitmap cropped = Bitmap.createBitmap(scaled, cropX, cropY, screenW, screenH);
+
+        // Recycle the intermediate scaled bitmap if it is a new object
+        if (scaled != cropped && !scaled.isRecycled()) {
+            scaled.recycle();
+        }
+
+        Log.d(TAG, "📐 Cover+crop: src=" + srcW + "x" + srcH +
+              " scale=" + scale +
+              " scaled=" + scaledW + "x" + scaledH +
+              " crop=(" + cropX + "," + cropY + ")" +
+              " final=" + screenW + "x" + screenH);
+
+        return cropped;
     }
 
     /**
@@ -481,7 +522,7 @@ public class WallpaperPlugin extends Plugin {
                 
                 Log.d(TAG, "✅ Downloaded " + totalBytes + " bytes");
                 Log.d(TAG, "💾 Saved to: " + videoFile.getAbsolutePath());
-                
+
                 // Save path for LiveWallpaperService to use
                 getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
                     .edit()
@@ -658,3 +699,4 @@ public class WallpaperPlugin extends Plugin {
         }
     }
 }
+                
