@@ -167,11 +167,32 @@ else
     echo -e "${RED}❌ MISSING${NC}"
 fi
 
+echo -n "Checking ParallaxWallpaperService.java... "
+if [ -f "android/src/main/java/com/dreamydesk/app/ParallaxWallpaperService.java" ]; then
+    echo -e "${GREEN}✅ EXISTS${NC}"
+else
+    echo -e "${RED}❌ MISSING${NC}"
+fi
+
+echo -n "Checking parallax_wallpaper.xml... "
+if [ -f "android/src/main/res/xml/parallax_wallpaper.xml" ]; then
+    echo -e "${GREEN}✅ EXISTS${NC}"
+else
+    echo -e "${RED}❌ MISSING${NC}"
+fi
+
+echo -n "Checking AndroidManifest registers ParallaxWallpaperService... "
+if grep -q "\.ParallaxWallpaperService" android/src/main/AndroidManifest.xml; then
+    echo -e "${GREEN}✅ REGISTERED${NC}"
+else
+    echo -e "${RED}❌ NOT REGISTERED${NC}"
+fi
+
 # Check methods
 echo ""
 echo "Checking plugin methods:"
 
-methods=("setImageAsWallpaper" "setImageAsLockScreen" "setImageAsWallpaperAndLockScreen" "setLiveWallpaper" "isAvailable")
+methods=("setImageAsWallpaper" "setImageAsLockScreen" "setImageAsWallpaperAndLockScreen" "setLiveWallpaper" "isAvailable" "setParallaxWallpaper" "updateParallaxSettings" "resetParallaxEffect" "isParallaxSupported")
 
 for method in "${methods[@]}"; do
     echo -n "  - $method: "

@@ -24,6 +24,20 @@
                 android:name="android.service.wallpaper"
                 android:resource="@xml/live_wallpaper" />
         </service>
+
+        <service
+            android:name=".ParallaxWallpaperService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/parallax_wallpaper_service_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/parallax_wallpaper" />
+        </service>
     </application>
 
 </manifest>
