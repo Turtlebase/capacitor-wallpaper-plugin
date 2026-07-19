@@ -522,7 +522,7 @@ public class WallpaperPlugin extends Plugin {
                 
                 Log.d(TAG, "✅ Downloaded " + totalBytes + " bytes");
                 Log.d(TAG, "💾 Saved to: " + videoFile.getAbsolutePath());
-                
+
                 // Save path for LiveWallpaperService to use
                 getContext().getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
                     .edit()
@@ -699,3 +699,4 @@ public class WallpaperPlugin extends Plugin {
         }
     }
 }
+                
