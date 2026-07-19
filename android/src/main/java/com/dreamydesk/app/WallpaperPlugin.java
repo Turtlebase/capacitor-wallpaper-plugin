@@ -297,11 +297,11 @@ public class WallpaperPlugin extends Plugin {
             return;
         }
 
-        final float intensity = clampFloat((float) call.getDouble("intensity", (double) 30f), 0f, 100f);
-        final float speed = clampFloat((float) call.getDouble("speed", (double) 0.12f), 0.01f, 1f);
+        final float intensity = clampFloat(call.getDouble("intensity", 30d).floatValue(), 0f, 100f);
+        final float speed = clampFloat(call.getDouble("speed", 0.12d).floatValue(), 0.01f, 1f);
         final boolean sensorParallax = call.getBoolean("sensorParallax", true);
         final boolean scrollParallax = call.getBoolean("scrollParallax", true);
-        final float overscan = clampFloat((float) call.getDouble("overscan", (double) 1.3f), 1.05f, 2.0f);
+        final float overscan = clampFloat(call.getDouble("overscan", 1.3d).floatValue(), 1.05f, 2.0f);
 
         Bitmap bmp;
         ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -348,10 +348,10 @@ public class WallpaperPlugin extends Plugin {
         JSObject data = call.getData();
 
         if (data.has("intensity")) {
-            editor.putFloat("parallax_intensity", clampFloat((float) call.getDouble("intensity", 30d), 0f, 100f));
+            editor.putFloat("parallax_intensity", clampFloat(call.getDouble("intensity", 30d).floatValue(), 0f, 100f));
         }
         if (data.has("speed")) {
-            editor.putFloat("parallax_speed", clampFloat((float) call.getDouble("speed", 0.12d), 0.01f, 1f));
+            editor.putFloat("parallax_speed", clampFloat(call.getDouble("speed", 0.12d).floatValue(), 0.01f, 1f));
         }
         if (data.has("sensorParallax")) {
             editor.putBoolean("parallax_sensor_enabled", call.getBoolean("sensorParallax", true));
