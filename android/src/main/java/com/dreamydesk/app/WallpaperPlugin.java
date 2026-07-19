@@ -4,8 +4,12 @@ import android.app.WallpaperManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -34,8 +38,12 @@ import java.util.concurrent.Future;
  * 
  * Static wallpapers: Set directly by the app (no restart, instant like Zedge)
  * Live wallpapers: Download video/GIF, then open native Android picker for user selection
- * 
- * @version 1.4.0 - Cover+centre-crop for tablets, two-pass inSampleSize decode, background thread apply, main-thread callbacks
+ * Parallax wallpapers: Download image at oversized "cover" resolution, then open native
+ *                       Android picker pointed at ParallaxWallpaperService, which pans
+ *                       the image based on home-screen scroll + device tilt.
+ *
+ * @version 1.5.0 - Added parallax live wallpaper support (setParallaxWallpaper,
+ *                   updateParallaxSettings, resetParallaxEffect, isParallaxSupported)
  */
 @CapacitorPlugin(name = "WallpaperPlugin")
 public class WallpaperPlugin extends Plugin {
@@ -230,7 +238,7 @@ public class WallpaperPlugin extends Plugin {
                     .apply();
 
                 Log.d(TAG, "✅ Local file path set for LiveWallpaperService: " + videoFile.getAbsolutePath());
-                openNativeLiveWallpaperPicker(call);
+                openNativeLiveWallpaperPicker(call, LiveWallpaperService.class);
             } catch (Exception e) {
                 Log.e(TAG, "❌ Error handling local file URI: " + e.getMessage());
                 call.reject("Error handling local file: " + e.getMessage());
@@ -249,7 +257,7 @@ public class WallpaperPlugin extends Plugin {
             boolean success = future.get();
             if (success) {
                 Log.d(TAG, "✅ Download complete - opening native picker");
-                openNativeLiveWallpaperPicker(call);
+                openNativeLiveWallpaperPicker(call, LiveWallpaperService.class);
             } else {
                 call.reject("Failed to download video");
             }
@@ -262,17 +270,167 @@ public class WallpaperPlugin extends Plugin {
     }
 
     /**
-     * Opens Android's native live wallpaper chooser
-     * User can preview and select the wallpaper
+     * Turn an image into a parallax live wallpaper.
+     *
+     * The app only needs to provide a `url`; everything else (pan range,
+     * speed, whether scroll/tilt drive the motion, how much overscan room
+     * to render) is optional and defaults to sensible values. The plugin:
+     *   1. Downloads the image at an oversized resolution (screen * overscan)
+     *      so there's room to pan without exposing edges.
+     *   2. Cover+centre-crops it to that oversized target (same technique
+     *      used for static wallpapers, just at a larger canvas).
+     *   3. Saves it to persistent app storage and records the effect
+     *      settings in SharedPreferences.
+     *   4. Opens the native live wallpaper picker pointed at
+     *      ParallaxWallpaperService, which does the actual scroll/tilt
+     *      panning + smoothing at render time.
      */
-    private void openNativeLiveWallpaperPicker(PluginCall call) {
+    @PluginMethod
+    public void setParallaxWallpaper(PluginCall call) {
+        Log.d(TAG, "🌄 setParallaxWallpaper called");
+
+        context = getContext();
+
+        String url = call.getString("url");
+        if (url == null || url.isEmpty()) {
+            call.reject("Must provide URL");
+            return;
+        }
+
+        final float intensity = clampFloat((float) call.getDouble("intensity", (double) 30f), 0f, 100f);
+        final float speed = clampFloat((float) call.getDouble("speed", (double) 0.12f), 0.01f, 1f);
+        final boolean sensorParallax = call.getBoolean("sensorParallax", true);
+        final boolean scrollParallax = call.getBoolean("scrollParallax", true);
+        final float overscan = clampFloat((float) call.getDouble("overscan", (double) 1.3f), 1.05f, 2.0f);
+
+        Bitmap bmp;
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        Future<Bitmap> future = executorService.submit(new GetBitmapFromURLCallable(url, overscan));
+
         try {
-            Log.d(TAG, "📱 Launching native wallpaper picker");
+            bmp = future.get();
+
+            if (bmp == null) {
+                call.reject("Failed to download image");
+                executorService.shutdown();
+                return;
+            }
+
+            // Cover+crop to the oversized (screen * overscan) canvas — gives the
+            // engine pan room while still filling the screen with no letterboxing.
+            bmp = resizeBitmapForParallax(bmp, overscan);
+        } catch (InterruptedException | ExecutionException e) {
+            e.printStackTrace();
+            call.reject("Download failed: " + e.getMessage());
+            executorService.shutdown();
+            return;
+        }
+
+        final Bitmap finalBmp = bmp;
+        wallpaperExecutor.execute(new SaveParallaxImageRunnable(
+                finalBmp, call, intensity, speed, sensorParallax, scrollParallax));
+        executorService.shutdown();
+    }
+
+    /**
+     * Update the intensity/speed/sensor/scroll settings of the currently
+     * active parallax wallpaper in place — ParallaxWallpaperService listens
+     * for SharedPreferences changes and applies them on the next frame, so
+     * no re-download or re-picker step is needed.
+     */
+    @PluginMethod
+    public void updateParallaxSettings(PluginCall call) {
+        Log.d(TAG, "🎚️ updateParallaxSettings called");
+
+        context = getContext();
+        SharedPreferences prefs = context.getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        JSObject data = call.getData();
+
+        if (data.has("intensity")) {
+            editor.putFloat("parallax_intensity", clampFloat((float) call.getDouble("intensity", 30d), 0f, 100f));
+        }
+        if (data.has("speed")) {
+            editor.putFloat("parallax_speed", clampFloat((float) call.getDouble("speed", 0.12d), 0.01f, 1f));
+        }
+        if (data.has("sensorParallax")) {
+            editor.putBoolean("parallax_sensor_enabled", call.getBoolean("sensorParallax", true));
+        }
+        if (data.has("scrollParallax")) {
+            editor.putBoolean("parallax_scroll_enabled", call.getBoolean("scrollParallax", true));
+        }
+        editor.apply();
+
+        JSObject result = new JSObject();
+        result.put("success", true);
+        call.resolve(result);
+    }
+
+    /**
+     * Resets/stops the parallax effect and clears the system wallpaper set
+     * by this plugin, reverting to the device default.
+     */
+    @PluginMethod
+    public void resetParallaxEffect(PluginCall call) {
+        Log.d(TAG, "♻️ resetParallaxEffect called");
+
+        context = getContext();
+
+        try {
+            WallpaperManager.getInstance(context).clear(WallpaperManager.FLAG_SYSTEM);
+
+            context.getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .remove("parallax_image_path")
+                .remove("parallax_timestamp")
+                .apply();
+
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+
+            Log.d(TAG, "✅ Parallax effect reset, wallpaper cleared to default");
+        } catch (IOException e) {
+            Log.e(TAG, "❌ Failed to reset wallpaper: " + e.getMessage());
+            call.reject("Failed to reset wallpaper: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Whether this device can run the parallax wallpaper feature:
+     * requires live wallpaper support, and reports whether a motion
+     * sensor is present (sensor-based tilt parallax will silently no-op
+     * without one, but scroll-based parallax still works).
+     */
+    @PluginMethod
+    public void isParallaxSupported(PluginCall call) {
+        context = getContext();
+
+        boolean liveWallpaperSupported = context.getPackageManager()
+                .hasSystemFeature(PackageManager.FEATURE_LIVE_WALLPAPER);
+
+        SensorManager sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        boolean hasSensor = sensorManager != null
+                && sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null;
+
+        JSObject result = new JSObject();
+        result.put("supported", liveWallpaperSupported);
+        result.put("hasSensor", hasSensor);
+        call.resolve(result);
+    }
+
+    /**
+     * Opens Android's native live wallpaper chooser for the given service.
+     * User can preview and select the wallpaper.
+     */
+    private void openNativeLiveWallpaperPicker(PluginCall call, Class<?> serviceClass) {
+        try {
+            Log.d(TAG, "📱 Launching native wallpaper picker for " + serviceClass.getSimpleName());
             
             Intent intent = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
             intent.putExtra(
                 WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                new ComponentName(getContext(), LiveWallpaperService.class)
+                new ComponentName(getContext(), serviceClass)
             );
             
             intent.addFlags(
@@ -350,6 +508,56 @@ public class WallpaperPlugin extends Plugin {
     }
 
     /**
+     * Same cover+centre-crop technique as resizeBitmapToScreen, but targets an
+     * OVERSIZED canvas (screen dimensions * overscan) instead of the screen
+     * exactly. The extra pixels around every edge are what
+     * ParallaxWallpaperService pans across — without this room the image
+     * would either show black edges or have to be scaled/cropped live
+     * (which the Android WallpaperService canvas surface doesn't support).
+     */
+    private Bitmap resizeBitmapForParallax(Bitmap bmp, float overscan) {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        int targetW = Math.round(metrics.widthPixels * overscan);
+        int targetH = Math.round(metrics.heightPixels * overscan);
+
+        int srcW = bmp.getWidth();
+        int srcH = bmp.getHeight();
+
+        float scaleX = (float) targetW / srcW;
+        float scaleY = (float) targetH / srcH;
+        float scale = Math.max(scaleX, scaleY);
+
+        int scaledW = Math.round(srcW * scale);
+        int scaledH = Math.round(srcH * scale);
+
+        Bitmap scaled = Bitmap.createScaledBitmap(bmp, scaledW, scaledH, true);
+        if (scaled != bmp && !bmp.isRecycled()) {
+            bmp.recycle();
+        }
+
+        int cropX = Math.max(0, (scaledW - targetW) / 2);
+        int cropY = Math.max(0, (scaledH - targetH) / 2);
+        int cropW = Math.min(targetW, scaledW);
+        int cropH = Math.min(targetH, scaledH);
+
+        Bitmap cropped = Bitmap.createBitmap(scaled, cropX, cropY, cropW, cropH);
+        if (scaled != cropped && !scaled.isRecycled()) {
+            scaled.recycle();
+        }
+
+        Log.d(TAG, "📐 Parallax cover+crop: src=" + srcW + "x" + srcH +
+              " overscan=" + overscan +
+              " target=" + targetW + "x" + targetH +
+              " final=" + cropped.getWidth() + "x" + cropped.getHeight());
+
+        return cropped;
+    }
+
+    private float clampFloat(float v, float min, float max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    /**
      * ✅ PATCH 6: Calculate the largest inSampleSize that keeps the decoded bitmap
      * at or above the required screen dimensions.
      * Powers the two-pass decode in GetBitmapFromURLCallable to avoid loading
@@ -384,9 +592,22 @@ public class WallpaperPlugin extends Plugin {
      */
     private class GetBitmapFromURLCallable implements Callable<Bitmap> {
         private String URL;
+        private float sizeMultiplier;
 
         private GetBitmapFromURLCallable(String URL) {
+            this(URL, 1.0f);
+        }
+
+        /**
+         * @param sizeMultiplier scales the target decode dimensions above the
+         *                       raw screen size (e.g. 1.3 for parallax, which
+         *                       needs a larger-than-screen source image to pan
+         *                       across). Only affects the inSampleSize chosen
+         *                       for pass 2 — never upscales beyond source res.
+         */
+        private GetBitmapFromURLCallable(String URL, float sizeMultiplier) {
             this.URL = URL;
+            this.sizeMultiplier = sizeMultiplier;
         }
 
         @Override
@@ -397,8 +618,8 @@ public class WallpaperPlugin extends Plugin {
 
             try {
                 DisplayMetrics metrics = context.getResources().getDisplayMetrics();
-                int reqWidth  = metrics.widthPixels;
-                int reqHeight = metrics.heightPixels;
+                int reqWidth  = Math.round(metrics.widthPixels * sizeMultiplier);
+                int reqHeight = Math.round(metrics.heightPixels * sizeMultiplier);
 
                 // ✅ PATCH 6 — Pass 1: decode bounds only (zero pixels loaded into RAM)
                 BitmapFactory.Options options = new BitmapFactory.Options();
@@ -544,6 +765,74 @@ public class WallpaperPlugin extends Plugin {
                     if (connection != null) connection.disconnect();
                 } catch (IOException e) {
                     e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    /**
+     * Persists the oversized parallax bitmap to disk, writes the effect
+     * settings (intensity/speed/sensor/scroll) to SharedPreferences so
+     * ParallaxWallpaperService can pick them up, then opens the native
+     * live wallpaper picker on the main thread.
+     */
+    private class SaveParallaxImageRunnable implements Runnable {
+        private final Bitmap bmp;
+        private final PluginCall callbackContext;
+        private final float intensity;
+        private final float speed;
+        private final boolean sensorParallax;
+        private final boolean scrollParallax;
+
+        private SaveParallaxImageRunnable(Bitmap bmp, PluginCall callbackContext, float intensity,
+                                           float speed, boolean sensorParallax, boolean scrollParallax) {
+            this.bmp = bmp;
+            this.callbackContext = callbackContext;
+            this.intensity = intensity;
+            this.speed = speed;
+            this.sensorParallax = sensorParallax;
+            this.scrollParallax = scrollParallax;
+        }
+
+        @Override
+        public void run() {
+            FileOutputStream fos = null;
+            try {
+                // Persistent storage (not cache) — the wallpaper service needs
+                // this file to stick around for as long as the wallpaper is active.
+                File outFile = new File(context.getFilesDir(), "parallax_wallpaper.jpg");
+                fos = new FileOutputStream(outFile);
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, fos);
+                fos.flush();
+
+                context.getSharedPreferences("WallpaperPrefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("parallax_image_path", outFile.getAbsolutePath())
+                    .putFloat("parallax_intensity", intensity)
+                    .putFloat("parallax_speed", speed)
+                    .putBoolean("parallax_sensor_enabled", sensorParallax)
+                    .putBoolean("parallax_scroll_enabled", scrollParallax)
+                    .putLong("parallax_timestamp", System.currentTimeMillis())
+                    .apply();
+
+                Log.d(TAG, "✅ Parallax image saved: " + outFile.getAbsolutePath() +
+                      " intensity=" + intensity + " speed=" + speed +
+                      " sensor=" + sensorParallax + " scroll=" + scrollParallax);
+
+                // Opening an Activity + resolving the call must happen on the main thread.
+                getBridge().executeOnMainThread(() ->
+                        openNativeLiveWallpaperPicker(callbackContext, ParallaxWallpaperService.class));
+
+            } catch (IOException e) {
+                Log.e(TAG, "❌ Failed to save parallax image: " + e.getMessage());
+                getBridge().executeOnMainThread(() ->
+                        callbackContext.reject("Failed to save parallax image: " + e.getMessage()));
+            } finally {
+                try {
+                    if (fos != null) fos.close();
+                } catch (IOException ignored) {}
+                if (bmp != null && !bmp.isRecycled()) {
+                    bmp.recycle();
                 }
             }
         }

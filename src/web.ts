@@ -19,6 +19,22 @@ export class WallpaperPluginWeb extends WebPlugin implements WallpaperPluginPlug
     throw this.unimplemented('Not implemented on web.');
   }
 
+  async setParallaxWallpaper(): Promise<{ success: boolean }> {
+    throw this.unimplemented('Not implemented on web.');
+  }
+
+  async updateParallaxSettings(): Promise<{ success: boolean }> {
+    throw this.unimplemented('Not implemented on web.');
+  }
+
+  async resetParallaxEffect(): Promise<{ success: boolean }> {
+    throw this.unimplemented('Not implemented on web.');
+  }
+
+  async isParallaxSupported(): Promise<{ supported: boolean; hasSensor: boolean }> {
+    return { supported: false, hasSensor: false };
+  }
+
   async isAvailable(): Promise<{ available: boolean }> {
     return { available: false };
   }

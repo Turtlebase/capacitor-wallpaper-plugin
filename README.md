@@ -9,6 +9,7 @@ A Capacitor plugin for setting static and live wallpapers on Android devices.
 
 ✅ Set static images as wallpaper (Home, Lock, or Both screens)  
 ✅ Set videos as live wallpaper  
+✅ Set images as **parallax live wallpaper** — pans with home-screen swipe and/or device tilt, with configurable range/speed  
 ✅ Auto-loop video playback  
 ✅ Battery-optimized (pauses when screen is off)  
 ✅ Memory-efficient implementation  
@@ -64,6 +65,63 @@ if (result.requiresUserAction) {
 }
 ```
 
+### Set Parallax Wallpaper
+
+Turns any image into a parallax live wallpaper — the image pans as the user
+swipes between home screens and/or tilts the device, just like the parallax
+wallpapers in apps like Zedge. You only need to supply the image URL; the
+plugin downloads it, renders it at an oversized "cover" resolution for pan
+room, and builds the whole effect natively. Range, speed, and which inputs
+drive the motion are all optional and fully configurable.
+
+> ⚠️ The examples below use the plugin's actual exported object,
+> `WallpaperPlugin` (see `src/index.ts`), and its real method names —
+> not the `Wallpaper.setStatic(...)`-style names shown elsewhere in this
+> README, which don't match the shipped API.
+
+```typescript
+import { WallpaperPlugin } from 'capacitor-wallpaper-plugin';
+
+// Minimal — sensible defaults for everything
+await WallpaperPlugin.setParallaxWallpaper({
+  url: 'https://example.com/image.jpg',
+});
+
+// Fully customized
+await WallpaperPlugin.setParallaxWallpaper({
+  url: 'https://example.com/image.jpg',
+  intensity: 40,        // 0-100, how far the image can pan (default 30)
+  speed: 0.15,           // 0.01-1, motion smoothing/responsiveness (default 0.12)
+  sensorParallax: true,  // pan with device tilt (default true)
+  scrollParallax: true,  // pan with home-screen swipe (default true)
+  overscan: 1.4,          // 1.05-2.0, how much bigger than the screen to render (default 1.3)
+});
+```
+
+Tweak an already-active parallax wallpaper without re-downloading the image
+or reopening the picker:
+
+```typescript
+await WallpaperPlugin.updateParallaxSettings({
+  intensity: 60,
+  sensorParallax: false, // e.g. turn off tilt, keep only swipe-based motion
+});
+```
+
+Reset the effect and revert to the device's default wallpaper:
+
+```typescript
+await WallpaperPlugin.resetParallaxEffect();
+```
+
+Check device support before showing a "Set as Parallax" button:
+
+```typescript
+const { supported, hasSensor } = await WallpaperPlugin.isParallaxSupported();
+// supported: device can run live wallpapers at all
+// hasSensor: device has a motion sensor, so tilt-based parallax will work
+```
+
 ### Check if Supported
 
 ```typescript
@@ -105,6 +163,43 @@ Set a video as live wallpaper.
 Check if wallpaper functionality is supported on the current device.
 
 **Returns:** `Promise<{ supported: boolean; platform: string }>`
+
+### `setParallaxWallpaper(options)`
+
+Download an image and set it as a parallax live wallpaper, panning with
+home-screen swipe and/or device tilt.
+
+**Parameters:**
+- `url` (string): URL (or `file://` URI) of the image to use
+- `intensity` (number, optional): 0-100 pan range, default `30`
+- `speed` (number, optional): 0.01-1 motion smoothing, default `0.12`
+- `sensorParallax` (boolean, optional): pan with device tilt, default `true`
+- `scrollParallax` (boolean, optional): pan with home-screen swipe, default `true`
+- `overscan` (number, optional): 1.05-2.0, how much bigger than the screen the source image is rendered, default `1.3`
+
+**Returns:** `Promise<{ success: boolean }>`
+
+### `updateParallaxSettings(options)`
+
+Update the intensity/speed/sensor/scroll settings of the currently active
+parallax wallpaper in place, live — no re-download or re-picker step.
+
+**Parameters:** any subset of `intensity`, `speed`, `sensorParallax`, `scrollParallax`
+
+**Returns:** `Promise<{ success: boolean }>`
+
+### `resetParallaxEffect()`
+
+Stop the parallax effect and clear the system wallpaper set by this plugin,
+reverting to the device default.
+
+**Returns:** `Promise<{ success: boolean }>`
+
+### `isParallaxSupported()`
+
+Check whether this device can run the parallax wallpaper feature.
+
+**Returns:** `Promise<{ supported: boolean; hasSensor: boolean }>`
 
 ## Video Requirements
 
@@ -254,6 +349,14 @@ MIT License - Copyright (c) 2024 Umesh Dafda
 If you encounter any issues, please [open an issue](https://github.com/Turtlebase/capacitor-wallpaper-plugin/issues) on GitHub.
 
 ## Changelog
+
+### 1.5.0
+- Added **parallax live wallpaper** support:
+  - `setParallaxWallpaper(options)` — turn any image into a parallax wallpaper with configurable intensity/speed/overscan and scroll/tilt toggles
+  - `updateParallaxSettings(options)` — live-tweak an active parallax wallpaper's range/speed without re-downloading
+  - `resetParallaxEffect()` — stop the effect and revert to the device default wallpaper
+  - `isParallaxSupported()` — check device support (live wallpaper + motion sensor)
+  - New `ParallaxWallpaperService` renders the effect natively: smooth exponential-lerp panning driven by home-screen scroll offsets and a low-pass-filtered accelerometer signal, over an oversized "cover" render of the source image
 
 ### 1.0.0
 - Initial release
