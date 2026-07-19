@@ -4,16 +4,18 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Camera;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.os.Handler;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.SurfaceHolder;
 
 import java.io.File;
@@ -40,13 +42,15 @@ public class ParallaxWallpaperService extends WallpaperService {
     static final String KEY_IMAGE_PATH = "parallax_image_path";
     static final String KEY_INTENSITY = "parallax_intensity";       // 0-100
     static final String KEY_SPEED = "parallax_speed";               // 0.01-1
+    static final String KEY_DEPTH_STRENGTH = "parallax_depth_strength"; // 0-2
     static final String KEY_SENSOR_ENABLED = "parallax_sensor_enabled";
     static final String KEY_SCROLL_ENABLED = "parallax_scroll_enabled";
     static final String KEY_TIMESTAMP = "parallax_timestamp";
 
     private static final float DEFAULT_INTENSITY = 30f;
-    private static final float DEFAULT_SPEED = 0.12f;
-    private static final long FRAME_INTERVAL_MS = 16; // ~60 FPS
+    private static final float DEFAULT_SPEED = 0.2f;
+    private static final float DEFAULT_DEPTH_STRENGTH = 1.0f;
+    private static final float MAX_PERSPECTIVE_DEGREES = 5.5f;
 
     @Override
     public Engine onCreateEngine() {
@@ -56,13 +60,17 @@ public class ParallaxWallpaperService extends WallpaperService {
     private class ParallaxEngine extends Engine implements SensorEventListener,
             SharedPreferences.OnSharedPreferenceChangeListener {
 
-        private final Handler handler = new Handler();
         private SurfaceHolder holder;
-        private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+        private final Camera camera = new Camera();
+        private final Matrix cameraMatrix = new Matrix();
+        private final float[] rotationMatrix = new float[9];
+        private final float[] orientation = new float[3];
 
         private SharedPreferences prefs;
         private SensorManager sensorManager;
         private Sensor accelerometer;
+        private Sensor gameRotation;
 
         private Bitmap bitmap;
         private long loadedTimestamp = -1;
@@ -73,6 +81,7 @@ public class ParallaxWallpaperService extends WallpaperService {
         // ----- configurable, hot-reloadable settings -----
         private volatile float intensity = DEFAULT_INTENSITY; // 0-100
         private volatile float speed = DEFAULT_SPEED;         // 0.01-1
+        private volatile float depthStrength = DEFAULT_DEPTH_STRENGTH; // 0-2
         private volatile boolean sensorEnabled = true;
         private volatile boolean scrollEnabled = true;
 
@@ -100,21 +109,28 @@ public class ParallaxWallpaperService extends WallpaperService {
         // Acceleration clamp: caps how much velocity can change in one frame, so a
         // sudden tilt or fast swipe can't cause a jarring instantaneous snap —
         // motion always ramps up/down instead of teleporting in direction/speed.
-        private static final float MAX_ACCEL_PER_FRAME = 0.35f; // px/frame^2 scaling factor
-        private static final float SPRING_DAMPING = 0.78f;      // 0-1, higher = less overshoot
+        private static final float MAX_ACCEL_PER_FRAME = 0.55f; // px/frame^2 scaling factor
+        private static final float SPRING_DAMPING = 0.86f;      // 0-1, higher = less overshoot
 
         // low-pass filter state for accelerometer (stage 1: isolate gravity from noise)
         private final float[] gravity = new float[3];
-        private static final float LOW_PASS_ALPHA = 0.15f;
+        private static final float LOW_PASS_ALPHA = 0.22f;
 
         // low-pass filter state for the *normalized* tilt output (stage 2: smooth
         // out residual jitter/twitchiness after normalization, independent of the
         // raw gravity filter above — this is what removes the "nervous" feel).
         private float smoothedTiltNormX = 0f;
         private float smoothedTiltNormY = 0f;
-        private static final float TILT_SMOOTHING_ALPHA = 0.12f;
+        private static final float TILT_SMOOTHING_ALPHA = 0.2f;
 
-        private final Runnable drawRunner = this::draw;
+        private boolean frameScheduled = false;
+        private long lastFrameNanos = 0L;
+        private final Choreographer.FrameCallback frameCallback = frameTimeNanos -> {
+            frameScheduled = false;
+            if (!visible) return;
+            draw(frameTimeNanos);
+            scheduleNextFrame();
+        };
 
         ParallaxEngine() {
             holder = getSurfaceHolder();
@@ -128,6 +144,7 @@ public class ParallaxWallpaperService extends WallpaperService {
             sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
             if (sensorManager != null) {
                 accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+                gameRotation = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
             }
             readSettingsFromPrefs();
         }
@@ -138,6 +155,7 @@ public class ParallaxWallpaperService extends WallpaperService {
         private void readSettingsFromPrefs() {
             intensity = clamp(prefs.getFloat(KEY_INTENSITY, DEFAULT_INTENSITY), 0f, 100f);
             speed = clamp(prefs.getFloat(KEY_SPEED, DEFAULT_SPEED), 0.01f, 1f);
+            depthStrength = clamp(prefs.getFloat(KEY_DEPTH_STRENGTH, DEFAULT_DEPTH_STRENGTH), 0f, 2f);
             sensorEnabled = prefs.getBoolean(KEY_SENSOR_ENABLED, true);
             scrollEnabled = prefs.getBoolean(KEY_SCROLL_ENABLED, true);
         }
@@ -153,6 +171,7 @@ public class ParallaxWallpaperService extends WallpaperService {
             switch (key) {
                 case KEY_INTENSITY:
                 case KEY_SPEED:
+                case KEY_DEPTH_STRENGTH:
                 case KEY_SCROLL_ENABLED:
                     readSettingsFromPrefs();
                     break;
@@ -239,10 +258,12 @@ public class ParallaxWallpaperService extends WallpaperService {
         // SENSOR (TILT)
         // =========================================================
         private void updateSensorRegistration() {
-            boolean shouldRegister = visible && sensorEnabled && accelerometer != null;
+            boolean hasAnyTiltSensor = gameRotation != null || accelerometer != null;
+            boolean shouldRegister = visible && sensorEnabled && hasAnyTiltSensor;
 
             if (shouldRegister && !sensorRegistered) {
-                sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
+                Sensor activeSensor = gameRotation != null ? gameRotation : accelerometer;
+                sensorManager.registerListener(this, activeSensor, SensorManager.SENSOR_DELAY_GAME);
                 sensorRegistered = true;
             } else if (!shouldRegister && sensorRegistered) {
                 sensorManager.unregisterListener(this);
@@ -252,20 +273,31 @@ public class ParallaxWallpaperService extends WallpaperService {
 
         @Override
         public void onSensorChanged(SensorEvent event) {
-            if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER) return;
+            int type = event.sensor.getType();
+            if (type == Sensor.TYPE_GAME_ROTATION_VECTOR) {
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values);
+                SensorManager.getOrientation(rotationMatrix, orientation);
 
-            // Simple low-pass filter to isolate gravity/tilt from jitter/motion noise
-            gravity[0] = LOW_PASS_ALPHA * event.values[0] + (1 - LOW_PASS_ALPHA) * gravity[0];
-            gravity[1] = LOW_PASS_ALPHA * event.values[1] + (1 - LOW_PASS_ALPHA) * gravity[1];
+                float roll = orientation[2];
+                float pitch = orientation[1];
+                tiltNormX = clamp((float) (roll / 0.6f), -1f, 1f);
+                tiltNormY = clamp((float) (-pitch / 0.6f), -1f, 1f);
+            } else if (type == Sensor.TYPE_ACCELEROMETER) {
+                // Simple low-pass filter to isolate gravity/tilt from jitter/motion noise
+                gravity[0] = LOW_PASS_ALPHA * event.values[0] + (1 - LOW_PASS_ALPHA) * gravity[0];
+                gravity[1] = LOW_PASS_ALPHA * event.values[1] + (1 - LOW_PASS_ALPHA) * gravity[1];
 
-            // gravity[0] (x) ranges roughly -9.8..9.8 as the phone tilts left/right.
-            // gravity[1] (y) ranges roughly -9.8..9.8 as the phone tilts up/down.
-            // Normalize to -1..1 with a soft cap so normal handheld tilt covers the full range.
-            float rawX = gravity[0] / 6f;
-            float rawY = gravity[1] / 6f;
+                // gravity[0] (x) ranges roughly -9.8..9.8 as the phone tilts left/right.
+                // gravity[1] (y) ranges roughly -9.8..9.8 as the phone tilts up/down.
+                // Normalize to -1..1 with a soft cap so normal handheld tilt covers the full range.
+                float rawX = gravity[0] / 6f;
+                float rawY = gravity[1] / 6f;
 
-            tiltNormX = clamp(rawX, -1f, 1f);
-            tiltNormY = clamp(-rawY, -1f, 1f); // invert so tilting top-away pans up
+                tiltNormX = clamp(rawX, -1f, 1f);
+                tiltNormY = clamp(-rawY, -1f, 1f); // invert so tilting top-away pans up
+            } else {
+                return;
+            }
 
             // Second-pass smoothing on the normalized value itself. The gravity
             // low-pass above removes high-frequency accelerometer noise, but the
@@ -295,8 +327,15 @@ public class ParallaxWallpaperService extends WallpaperService {
         // =========================================================
         // DRAW LOOP
         // =========================================================
-        private void draw() {
+        private void draw(long frameTimeNanos) {
             if (!visible || bitmap == null) return;
+
+            if (lastFrameNanos == 0L) {
+                lastFrameNanos = frameTimeNanos;
+            }
+            float dt = (frameTimeNanos - lastFrameNanos) / 1_000_000_000f;
+            lastFrameNanos = frameTimeNanos;
+            dt = clamp(dt, 1f / 240f, 1f / 20f);
 
             // Combine input sources. Scroll only drives X (matches launcher paging);
             // tilt drives both X and Y for the "3D" feel. Each source is weighted
@@ -304,7 +343,7 @@ public class ParallaxWallpaperService extends WallpaperService {
             float scrollWeight = scrollEnabled ? 1f : 0f;
             float sensorWeight = sensorEnabled ? 1f : 0f;
 
-            float combinedX = clamp(scrollNormX * scrollWeight * 0.6f + smoothedTiltNormX * sensorWeight * 0.6f, -1f, 1f);
+            float combinedX = clamp(scrollNormX * scrollWeight * 0.65f + smoothedTiltNormX * sensorWeight * 0.75f, -1f, 1f);
             float combinedY = clamp(smoothedTiltNormY * sensorWeight, -1f, 1f);
 
             float amplitudeFraction = intensity / 100f;
@@ -328,16 +367,17 @@ public class ParallaxWallpaperService extends WallpaperService {
             //   3. velocity itself is damped each frame (SPRING_DAMPING), so motion
             //      settles into the target smoothly (ease-out) instead of
             //      overshooting or stopping abruptly
-            float desiredVelX = (targetPanX - currentPanX) * speed;
-            float desiredVelY = (targetPanY - currentPanY) * speed;
+            float desiredVelX = (targetPanX - currentPanX) * speed * (dt * 60f);
+            float desiredVelY = (targetPanY - currentPanY) * speed * (dt * 60f);
 
             float panRangeForAccel = Math.max(1f, Math.max(maxPanX, maxPanY));
-            float maxAccel = Math.max(0.01f, speed) * MAX_ACCEL_PER_FRAME * panRangeForAccel;
+            float maxAccel = Math.max(0.01f, speed) * MAX_ACCEL_PER_FRAME * panRangeForAccel * (dt * 60f);
             velocityX += clamp(desiredVelX - velocityX, -maxAccel, maxAccel);
             velocityY += clamp(desiredVelY - velocityY, -maxAccel, maxAccel);
 
-            velocityX *= SPRING_DAMPING;
-            velocityY *= SPRING_DAMPING;
+            float damping = (float) Math.pow(SPRING_DAMPING, dt * 60f);
+            velocityX *= damping;
+            velocityY *= damping;
 
             currentPanX += velocityX;
             currentPanY += velocityY;
@@ -365,8 +405,23 @@ public class ParallaxWallpaperService extends WallpaperService {
                 canvas.drawColor(Color.BLACK);
                 canvas.save();
                 canvas.translate(-currentPanX, -currentPanY);
+
+                float pivotX = surfaceW / 2f + currentPanX;
+                float pivotY = surfaceH / 2f + currentPanY;
+                float perspectiveDegrees = MAX_PERSPECTIVE_DEGREES * depthStrength;
+                float perspectiveX = smoothedTiltNormX * amplitudeFraction * perspectiveDegrees;
+                float perspectiveY = smoothedTiltNormY * amplitudeFraction * perspectiveDegrees;
+                camera.save();
+                camera.rotateY(perspectiveX);
+                camera.rotateX(-perspectiveY);
+                camera.getMatrix(cameraMatrix);
+                camera.restore();
+                cameraMatrix.preTranslate(-pivotX, -pivotY);
+                cameraMatrix.postTranslate(pivotX, pivotY);
+                canvas.concat(cameraMatrix);
+
                 if (breatheScale != 1f) {
-                    canvas.scale(breatheScale, breatheScale, surfaceW / 2f + currentPanX, surfaceH / 2f + currentPanY);
+                    canvas.scale(breatheScale, breatheScale, pivotX, pivotY);
                 }
                 canvas.drawBitmap(bitmap, 0, 0, paint);
                 canvas.restore();
@@ -380,10 +435,17 @@ public class ParallaxWallpaperService extends WallpaperService {
                 }
             }
 
-            handler.removeCallbacks(drawRunner);
-            if (visible) {
-                handler.postDelayed(drawRunner, FRAME_INTERVAL_MS);
-            }
+        }
+
+        private void scheduleNextFrame() {
+            if (!visible || frameScheduled) return;
+            frameScheduled = true;
+            Choreographer.getInstance().postFrameCallback(frameCallback);
+        }
+
+        private void cancelFrameLoop() {
+            Choreographer.getInstance().removeFrameCallback(frameCallback);
+            frameScheduled = false;
         }
 
         // =========================================================
@@ -396,10 +458,10 @@ public class ParallaxWallpaperService extends WallpaperService {
             if (visible) {
                 loadImageIfChanged();
                 updateSensorRegistration();
-                handler.removeCallbacks(drawRunner);
-                handler.post(drawRunner);
+                lastFrameNanos = 0L;
+                scheduleNextFrame();
             } else {
-                handler.removeCallbacks(drawRunner);
+                cancelFrameLoop();
                 updateSensorRegistration(); // will unregister since visible=false
             }
         }
@@ -424,7 +486,7 @@ public class ParallaxWallpaperService extends WallpaperService {
         public void onSurfaceDestroyed(SurfaceHolder holder) {
             super.onSurfaceDestroyed(holder);
             visible = false;
-            handler.removeCallbacks(drawRunner);
+            cancelFrameLoop();
             updateSensorRegistration();
             if (prefs != null) {
                 prefs.unregisterOnSharedPreferenceChangeListener(this);

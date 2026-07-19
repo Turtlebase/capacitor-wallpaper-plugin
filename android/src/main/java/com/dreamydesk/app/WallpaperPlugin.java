@@ -298,7 +298,8 @@ public class WallpaperPlugin extends Plugin {
         }
 
         final float intensity = clampFloat(call.getDouble("intensity", 30d).floatValue(), 0f, 100f);
-        final float speed = clampFloat(call.getDouble("speed", 0.12d).floatValue(), 0.01f, 1f);
+        final float speed = clampFloat(call.getDouble("speed", 0.2d).floatValue(), 0.01f, 1f);
+        final float depthStrength = clampFloat(call.getDouble("depthStrength", 1.0d).floatValue(), 0f, 2f);
         final boolean sensorParallax = call.getBoolean("sensorParallax", true);
         final boolean scrollParallax = call.getBoolean("scrollParallax", true);
         final float overscan = clampFloat(call.getDouble("overscan", 1.3d).floatValue(), 1.05f, 2.0f);
@@ -328,7 +329,7 @@ public class WallpaperPlugin extends Plugin {
 
         final Bitmap finalBmp = bmp;
         wallpaperExecutor.execute(new SaveParallaxImageRunnable(
-                finalBmp, call, intensity, speed, sensorParallax, scrollParallax));
+            finalBmp, call, intensity, speed, depthStrength, sensorParallax, scrollParallax));
         executorService.shutdown();
     }
 
@@ -351,7 +352,10 @@ public class WallpaperPlugin extends Plugin {
             editor.putFloat("parallax_intensity", clampFloat(call.getDouble("intensity", 30d).floatValue(), 0f, 100f));
         }
         if (data.has("speed")) {
-            editor.putFloat("parallax_speed", clampFloat(call.getDouble("speed", 0.12d).floatValue(), 0.01f, 1f));
+            editor.putFloat("parallax_speed", clampFloat(call.getDouble("speed", 0.2d).floatValue(), 0.01f, 1f));
+        }
+        if (data.has("depthStrength")) {
+            editor.putFloat("parallax_depth_strength", clampFloat(call.getDouble("depthStrength", 1.0d).floatValue(), 0f, 2f));
         }
         if (data.has("sensorParallax")) {
             editor.putBoolean("parallax_sensor_enabled", call.getBoolean("sensorParallax", true));
@@ -781,15 +785,17 @@ public class WallpaperPlugin extends Plugin {
         private final PluginCall callbackContext;
         private final float intensity;
         private final float speed;
+        private final float depthStrength;
         private final boolean sensorParallax;
         private final boolean scrollParallax;
 
         private SaveParallaxImageRunnable(Bitmap bmp, PluginCall callbackContext, float intensity,
-                                           float speed, boolean sensorParallax, boolean scrollParallax) {
+                                           float speed, float depthStrength, boolean sensorParallax, boolean scrollParallax) {
             this.bmp = bmp;
             this.callbackContext = callbackContext;
             this.intensity = intensity;
             this.speed = speed;
+            this.depthStrength = depthStrength;
             this.sensorParallax = sensorParallax;
             this.scrollParallax = scrollParallax;
         }
@@ -810,13 +816,14 @@ public class WallpaperPlugin extends Plugin {
                     .putString("parallax_image_path", outFile.getAbsolutePath())
                     .putFloat("parallax_intensity", intensity)
                     .putFloat("parallax_speed", speed)
+                                        .putFloat("parallax_depth_strength", depthStrength)
                     .putBoolean("parallax_sensor_enabled", sensorParallax)
                     .putBoolean("parallax_scroll_enabled", scrollParallax)
                     .putLong("parallax_timestamp", System.currentTimeMillis())
                     .apply();
 
                 Log.d(TAG, "✅ Parallax image saved: " + outFile.getAbsolutePath() +
-                      " intensity=" + intensity + " speed=" + speed +
+                                            " intensity=" + intensity + " speed=" + speed + " depthStrength=" + depthStrength +
                       " sensor=" + sensorParallax + " scroll=" + scrollParallax);
 
                 // Opening an Activity + resolving the call must happen on the main thread.

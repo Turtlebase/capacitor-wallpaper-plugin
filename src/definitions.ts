@@ -19,9 +19,16 @@ export interface ParallaxWallpaperOptions {
   /**
    * Smoothing/responsiveness of the motion, from 0.01 (very smooth/slow,
    * heavily damped) to 1 (snaps instantly to the target position).
-   * Default: 0.12
+    * Default: 0.2
    */
   speed?: number;
+
+    /**
+    * Strength of the pseudo-3D perspective tilt effect.
+    * 0 disables perspective rotation, 1 is default, 2 is very strong.
+    * Default: 1
+    */
+    depthStrength?: number;
 
   /**
    * Enable tilt-based parallax driven by the device's accelerometer.
@@ -49,6 +56,7 @@ export interface ParallaxWallpaperOptions {
 export interface ParallaxSettingsUpdate {
   intensity?: number;
   speed?: number;
+  depthStrength?: number;
   sensorParallax?: boolean;
   scrollParallax?: boolean;
 }
