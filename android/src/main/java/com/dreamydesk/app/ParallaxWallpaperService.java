@@ -527,8 +527,14 @@ public class ParallaxWallpaperService extends WallpaperService {
             surfaceH = height;
 
             // Help launchers compute multi-page wallpaper offsets consistently.
-            WallpaperManager.getInstance(ParallaxWallpaperService.this)
-                .suggestDesiredDimensions(width * 2, height);
+            try {
+                WallpaperManager.getInstance(ParallaxWallpaperService.this)
+                    .suggestDesiredDimensions(width * 2, height);
+            } catch (SecurityException ignored) {
+                // Some Android versions restrict this call for live wallpapers.
+            } catch (RuntimeException ignored) {
+                // Defensive: do not crash wallpaper engine on OEM-specific behavior.
+            }
 
             recomputePanBounds();
         }
