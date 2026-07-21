@@ -2,6 +2,7 @@ package com.dreamydesk.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.app.WallpaperManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Camera;
@@ -16,6 +17,7 @@ import android.hardware.SensorManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.Choreographer;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 
 import java.io.File;
@@ -78,6 +80,10 @@ public class ParallaxWallpaperService extends WallpaperService {
         private boolean visible = true;
         private boolean sensorRegistered = false;
 
+        // Manual swipe fallback state (for launchers that don't report offsets reliably)
+        private float lastTouchX = 0f;
+        private boolean touchDragging = false;
+
         // ----- configurable, hot-reloadable settings -----
         private volatile float intensity = DEFAULT_INTENSITY; // 0-100
         private volatile float speed = DEFAULT_SPEED;         // 0.01-1
@@ -139,6 +145,11 @@ public class ParallaxWallpaperService extends WallpaperService {
         @Override
         public void onCreate(SurfaceHolder surfaceHolder) {
             super.onCreate(surfaceHolder);
+            // Some launchers require this flag to deliver onOffsetsChanged.
+            setOffsetNotificationsEnabled(true);
+            // Enable direct touch callbacks as a fallback swipe source.
+            setTouchEventsEnabled(true);
+
             prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             prefs.registerOnSharedPreferenceChangeListener(this);
             sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
@@ -324,6 +335,41 @@ public class ParallaxWallpaperService extends WallpaperService {
             scrollNormX = clamp((xOffset - 0.5f) * 2f, -1f, 1f);
         }
 
+        @Override
+        public void onTouchEvent(MotionEvent event) {
+            super.onTouchEvent(event);
+
+            if (!scrollEnabled || surfaceW <= 0 || event == null) {
+                return;
+            }
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    touchDragging = true;
+                    lastTouchX = event.getX();
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (!touchDragging) {
+                        touchDragging = true;
+                        lastTouchX = event.getX();
+                        break;
+                    }
+                    float dx = event.getX() - lastTouchX;
+                    lastTouchX = event.getX();
+
+                    // Swipe right should move toward left pages (smaller offset), so invert sign.
+                    float deltaNorm = -(dx / Math.max(1f, (float) surfaceW)) * 2f;
+                    scrollNormX = clamp(scrollNormX + deltaNorm, -1f, 1f);
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    touchDragging = false;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         // =========================================================
         // DRAW LOOP
         // =========================================================
@@ -479,6 +525,11 @@ public class ParallaxWallpaperService extends WallpaperService {
             this.holder = holder;
             surfaceW = width;
             surfaceH = height;
+
+            // Help launchers compute multi-page wallpaper offsets consistently.
+            WallpaperManager.getInstance(ParallaxWallpaperService.this)
+                .suggestDesiredDimensions(width * 2, height);
+
             recomputePanBounds();
         }
 
