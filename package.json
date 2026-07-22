@@ -1,6 +1,6 @@
 {
   "name": "capacitor-wallpaper-plugin",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Capacitor plugin for setting static, live, and parallax wallpapers on Android",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
