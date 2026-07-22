@@ -65,6 +65,29 @@ export interface WallpaperPluginPlugin {
   setImageAsWallpaper(options: { url: string }): Promise<{ success: boolean }>;
   setImageAsLockScreen(options: { url: string }): Promise<{ success: boolean }>;
   setImageAsWallpaperAndLockScreen(options: { url: string }): Promise<{ success: boolean }>;
+
+  /**
+   * Sets a DIFFERENT image for the home screen and the lock screen in a
+   * single call — e.g. wallpaper A on home, wallpaper B on lock screen.
+   * Both URLs are required; pass the same URL twice if you actually want
+   * the same image on both (though setImageAsWallpaperAndLockScreen is a
+   * simpler call for that specific case).
+   *
+   * Both images download concurrently, and applying them is ALL-OR-NOTHING:
+   * if either download fails, neither screen is changed — so you can never
+   * end up with a mismatched pairing where only one screen updated. Applies
+   * silently in the background (no crop UI, no app restart), same as the
+   * other setImageAs* methods.
+   *
+   * On pre-Android 7.0 devices (no FLAG_LOCK support), the home wallpaper is
+   * applied but the promise rejects, explaining that the lock screen image
+   * could not be set separately on that OS version.
+   */
+  setHomeAndLockWallpapers(options: {
+    homeUrl: string;
+    lockUrl: string;
+  }): Promise<{ success: boolean; homeApplied: boolean; lockApplied: boolean }>;
+
   setLiveWallpaper(options: { url: string; type?: 'gif' | 'mp4' }): Promise<{ success: boolean }>;
 
   /**

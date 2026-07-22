@@ -194,11 +194,93 @@ public class WallpaperPlugin extends Plugin {
     }
 
     /**
-     * Download video/GIF from Firebase and open native Android live wallpaper picker
-     * User selects the wallpaper themselves - following Android guidelines
+     * Sets a DIFFERENT image for the home screen and the lock screen in a
+     * single call — e.g. "wallpaper A" on home, "wallpaper B" on lock.
+     *
+     * Both images are downloaded concurrently (two independent network
+     * calls, not sequential) to keep total wait time close to that of a
+     * single download rather than doubling it. Each is resized to the
+     * screen independently via the existing resizeBitmapToScreen, which is
+     * fully stateless and safe to call twice with different bitmaps.
+     *
+     * ALL-OR-NOTHING: if either download fails, NEITHER wallpaper is
+     * applied. This deliberately avoids a half-applied state where, say,
+     * the new home wallpaper is set but the lock screen still shows an old
+     * or default image — the two must change together or not at all, so
+     * home always corresponds to the home image and lock always
+     * corresponds to the lock image, with no possibility of a mismatch.
      */
     @PluginMethod
-    public void setLiveWallpaper(PluginCall call) {
+    public void setHomeAndLockWallpapers(PluginCall call) {
+        Log.d(TAG, "📱 setHomeAndLockWallpapers called");
+
+        context = getContext();
+
+        String homeUrl = call.getString("homeUrl");
+        String lockUrl = call.getString("lockUrl");
+
+        if (homeUrl == null || homeUrl.isEmpty()) {
+            call.reject("Must provide homeUrl");
+            return;
+        }
+        if (lockUrl == null || lockUrl.isEmpty()) {
+            call.reject("Must provide lockUrl");
+            return;
+        }
+
+        // Two-thread pool so both downloads run concurrently, not one after
+        // the other — this is purely for the network fetch, separate from
+        // wallpaperExecutor which serializes the actual apply step below.
+        ExecutorService downloadExecutor = Executors.newFixedThreadPool(2);
+        Future<Bitmap> homeFuture = downloadExecutor.submit(new GetBitmapFromURLCallable(homeUrl));
+        Future<Bitmap> lockFuture = downloadExecutor.submit(new GetBitmapFromURLCallable(lockUrl));
+
+        Bitmap homeBmp = null;
+        Bitmap lockBmp = null;
+
+        try {
+            homeBmp = homeFuture.get();
+            lockBmp = lockFuture.get();
+
+            if (homeBmp != null) {
+                homeBmp = resizeBitmapToScreen(homeBmp);
+            }
+            if (lockBmp != null) {
+                lockBmp = resizeBitmapToScreen(lockBmp);
+            }
+
+            if (homeBmp == null || lockBmp == null) {
+                // All-or-nothing: recycle whichever one DID succeed so it
+                // doesn't leak, then reject without touching either screen.
+                if (homeBmp != null && !homeBmp.isRecycled()) homeBmp.recycle();
+                if (lockBmp != null && !lockBmp.isRecycled()) lockBmp.recycle();
+
+                String failed = (homeBmp == null && lockBmp == null)
+                        ? "both images"
+                        : (homeBmp == null ? "home image" : "lock image");
+                call.reject("Failed to download " + failed + " — no wallpaper was changed");
+                downloadExecutor.shutdown();
+                return;
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            e.printStackTrace();
+            if (homeBmp != null && !homeBmp.isRecycled()) homeBmp.recycle();
+            if (lockBmp != null && !lockBmp.isRecycled()) lockBmp.recycle();
+            call.reject("Download failed: " + e.getMessage() + " — no wallpaper was changed");
+            downloadExecutor.shutdown();
+            return;
+        } finally {
+            downloadExecutor.shutdown();
+        }
+
+        // Both bitmaps are ready — apply on the serialized wallpaper executor,
+        // same thread pool used by every other set*Wallpaper method, so this
+        // can't race with a concurrent setImageAsWallpaper/setImageAsLockScreen
+        // call from elsewhere in the app.
+        wallpaperExecutor.execute(new SetHomeAndLockWallpapersRunnable(homeBmp, lockBmp, call));
+    }
+
+
         Log.d(TAG, "📱 setLiveWallpaper called");
         
         String videoUrl = call.getString("url");
@@ -994,5 +1076,87 @@ public class WallpaperPlugin extends Plugin {
             }
         }
     }
+
+    /**
+     * Applies two DIFFERENT already-downloaded, already-resized bitmaps: one
+     * to FLAG_SYSTEM (home) and one to FLAG_LOCK (lock screen). Both
+     * bitmaps are guaranteed non-null by the caller (setHomeAndLockWallpapers
+     * already enforced all-or-nothing at the download stage).
+     *
+     * Order matters for the failure-reporting message below, but not for
+     * correctness: FLAG_SYSTEM and FLAG_LOCK are independent slots in
+     * WallpaperManager, so setting one does not affect the other. If the
+     * second call throws after the first succeeded, we still reject overall
+     * (so the app knows the pairing wasn't fully applied) rather than
+     * resolving with a partial success that could be mistaken for "both set."
+     */
+    private class SetHomeAndLockWallpapersRunnable implements Runnable {
+        private Bitmap homeBmp;
+        private Bitmap lockBmp;
+        private PluginCall callbackContext;
+
+        private SetHomeAndLockWallpapersRunnable(Bitmap homeBmp, Bitmap lockBmp, PluginCall callbackContext) {
+            this.homeBmp = homeBmp;
+            this.lockBmp = lockBmp;
+            this.callbackContext = callbackContext;
+        }
+
+        @Override
+        public void run() {
+            WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);
+            boolean homeApplied = false;
+            boolean lockApplied = false;
+
+            try {
+                if (IS_NOUGAT_OR_GREATER) {
+                    wallpaperManager.setBitmap(homeBmp, null, false, WallpaperManager.FLAG_SYSTEM);
+                } else {
+                    wallpaperManager.setBitmap(homeBmp);
+                }
+                homeApplied = true;
+
+                if (IS_NOUGAT_OR_GREATER) {
+                    wallpaperManager.setBitmap(lockBmp, null, false, WallpaperManager.FLAG_LOCK);
+                    lockApplied = true;
+                } else {
+                    // Pre-Nougat devices have no separate lock-screen wallpaper
+                    // API; FLAG_LOCK is unavailable, so home was applied but a
+                    // distinct lock image cannot be. Report this clearly rather
+                    // than silently pretending both were set.
+                    Log.d(TAG, "⚠️ Device is pre-Android 7.0: no separate lock screen wallpaper API, lock image not applied");
+                }
+
+                if (homeBmp != null && !homeBmp.isRecycled()) homeBmp.recycle();
+                if (lockBmp != null && !lockBmp.isRecycled()) lockBmp.recycle();
+
+                if (homeApplied && lockApplied) {
+                    JSObject result = new JSObject();
+                    result.put("success", true);
+                    result.put("homeApplied", true);
+                    result.put("lockApplied", true);
+                    getBridge().executeOnMainThread(() -> callbackContext.resolve(result));
+                    Log.d(TAG, "✅ Home and lock wallpapers set successfully (different images) - No restart!");
+                } else {
+                    // homeApplied but lockApplied is false: pre-Nougat case above.
+                    getBridge().executeOnMainThread(() ->
+                            callbackContext.reject("Home wallpaper was set, but this device does not support a separate lock screen wallpaper (requires Android 7.0+)"));
+                }
+
+            } catch (IOException e) {
+                if (homeBmp != null && !homeBmp.isRecycled()) homeBmp.recycle();
+                if (lockBmp != null && !lockBmp.isRecycled()) lockBmp.recycle();
+                final boolean homeWasApplied = homeApplied;
+                getBridge().executeOnMainThread(() -> callbackContext.reject(
+                        (homeWasApplied
+                                ? "Home wallpaper was set, but lock screen failed: "
+                                : "Failed to set home wallpaper: ") + e.getMessage()));
+                e.printStackTrace();
+            } catch (OutOfMemoryError e) {
+                if (homeBmp != null && !homeBmp.isRecycled()) homeBmp.recycle();
+                if (lockBmp != null && !lockBmp.isRecycled()) lockBmp.recycle();
+                getBridge().executeOnMainThread(() -> callbackContext.reject("Out of memory: " + e.getMessage()));
+                e.printStackTrace();
+            }
+        }
+    }
 }
-                

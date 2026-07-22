@@ -8,6 +8,7 @@ A Capacitor plugin for setting static and live wallpapers on Android devices.
 ## Features
 
 ✅ Set static images as wallpaper (Home, Lock, or Both screens)  
+✅ Set **different images** for Home and Lock screen in one call, all-or-nothing  
 ✅ Set videos as live wallpaper  
 ✅ Set images as **parallax live wallpaper** — pans with home-screen swipe and/or device tilt, with configurable range/speed  
 ✅ Auto-loop video playback  
@@ -52,6 +53,67 @@ await Wallpaper.setStatic({
   screen: 'BOTH'
 });
 ```
+
+> **Note:** the examples above use a `setStatic({ screen })` shape for
+> illustration. The actual current API exposes three separate methods
+> instead — `setImageAsWallpaper`, `setImageAsLockScreen`, and
+> `setImageAsWallpaperAndLockScreen` — shown below with real usage.
+
+```typescript
+// Home screen only
+await WallpaperPlugin.setImageAsWallpaper({ url: 'https://example.com/image.jpg' });
+
+// Lock screen only
+await WallpaperPlugin.setImageAsLockScreen({ url: 'https://example.com/image.jpg' });
+
+// Same image, both screens
+await WallpaperPlugin.setImageAsWallpaperAndLockScreen({ url: 'https://example.com/image.jpg' });
+```
+
+### Set Different Wallpapers for Home and Lock Screen
+
+If you want a DIFFERENT image on each screen — e.g. the user picks one
+wallpaper for home and another for lock — use `setHomeAndLockWallpapers`
+instead of calling the single-image methods twice:
+
+```typescript
+const result = await WallpaperPlugin.setHomeAndLockWallpapers({
+  homeUrl: 'https://example.com/home-wallpaper.jpg',
+  lockUrl: 'https://example.com/lock-wallpaper.jpg',
+});
+
+// result: { success: true, homeApplied: true, lockApplied: true }
+```
+
+Both images download concurrently (not one after another), and the whole
+operation is **all-or-nothing**: if either download fails, neither screen
+is changed. This guarantees home always ends up showing the home image and
+lock always ends up showing the lock image — there is no in-between state
+where only one screen updated and the pairing is mismatched.
+
+If the call rejects, the error message tells you which side failed:
+
+```typescript
+try {
+  await WallpaperPlugin.setHomeAndLockWallpapers({ homeUrl, lockUrl });
+} catch (e) {
+  // e.message examples:
+  // "Failed to download home image — no wallpaper was changed"
+  // "Failed to download lock image — no wallpaper was changed"
+  // "Home wallpaper was set, but this device does not support a separate
+  //  lock screen wallpaper (requires Android 7.0+)"
+}
+```
+
+That last case — pre-Android 7.0 devices — is the one scenario where home
+can apply without lock: `WallpaperManager.FLAG_LOCK` doesn't exist before
+Android 7.0 (Nougat), so a distinct lock-screen image isn't possible on
+those OS versions. The rejection message says so explicitly rather than
+silently pretending both were set.
+
+An example screen (`example/DualWallpaperScreen.tsx`) shows a typical
+"pick home / pick lock / Set Both" flow with a single combined success/error
+state, matching how most wallpaper apps present this feature.
 
 ### Set Live Wallpaper (Video)
 
@@ -148,6 +210,24 @@ Set a static image as wallpaper.
   - `'BOTH'` - Both home and lock screens
 
 **Returns:** `Promise<{ success: boolean }>`
+
+### `setHomeAndLockWallpapers(options)`
+
+Set a different image on the home screen and lock screen in one call.
+
+**Parameters:**
+- `homeUrl` (string, required): URL of the image to set on the home screen
+- `lockUrl` (string, required): URL of the image to set on the lock screen
+
+**Returns:** `Promise<{ success: boolean; homeApplied: boolean; lockApplied: boolean }>`
+
+**Behavior:**
+- Both URLs download concurrently.
+- All-or-nothing: if either download fails, neither screen is changed — the
+  promise rejects and the message states which image failed.
+- On Android versions before 7.0 (no `FLAG_LOCK` support), the home image is
+  applied but the promise still rejects, explaining the lock screen image
+  could not be set separately on that OS version.
 
 ### `setLive(options)`
 

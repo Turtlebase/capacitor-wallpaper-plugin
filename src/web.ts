@@ -15,6 +15,10 @@ export class WallpaperPluginWeb extends WebPlugin implements WallpaperPluginPlug
     throw this.unimplemented('Not implemented on web.');
   }
 
+  async setHomeAndLockWallpapers(): Promise<{ success: boolean; homeApplied: boolean; lockApplied: boolean }> {
+    throw this.unimplemented('Not implemented on web.');
+  }
+
   async setLiveWallpaper(): Promise<{ success: boolean }> {
     throw this.unimplemented('Not implemented on web.');
   }
